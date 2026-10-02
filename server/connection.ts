@@ -1,213 +1,244 @@
 import type {
-  ProviderConnection,
-  ProviderEvent,
-  ProviderInput,
+	ProviderConnection,
+	ProviderEvent,
+	ProviderInput,
 } from "@getpaseo/plugin/server/provider";
+import { requireProviderCapabilities } from "@getpaseo/plugin/server/provider";
 import type { PluginSettings } from "@getpaseo/plugin/server";
 import type { settings } from "../shared/settings.js";
+import type { PromptImage } from "./session.js";
 import { buildCatalog } from "./catalog.js";
 import { EmbeddedSession } from "./session.js";
 
 type SettingsHandle = PluginSettings<typeof settings.schema>;
 
 export function createAutumnConnection(
-  capabilities: readonly string[],
-  settingsHandle: SettingsHandle,
+	capabilities: readonly string[],
+	settingsHandle: SettingsHandle,
 ): ProviderConnection {
-  const listeners = new Set<(event: ProviderEvent) => void>();
-  const sessions = new Map<string, EmbeddedSession>();
-  let closed = false;
+	const listeners = new Set<(event: ProviderEvent) => void>();
+	const sessions = new Map<string, EmbeddedSession>();
+	let closed = false;
 
-  const emit = (event: ProviderEvent) => {
-    if (closed) return;
-    for (const listener of listeners) {
-      try {
-        listener(event);
-      } catch (err) {
-        console.error("Provider listener error:", err);
-      }
-    }
-  };
+	const emit = (event: ProviderEvent) => {
+		if (closed) return;
+		for (const listener of listeners) {
+			try {
+				listener(event);
+			} catch (error) {
+				console.error("autumn-studio: provider listener error", error);
+			}
+		}
+	};
 
-  return {
-    version: 1,
-    capabilities,
+	return {
+		version: 1,
+		capabilities,
 
-    async send(input: ProviderInput) {
-      if (closed) throw new Error("Connection closed");
-      queueMicrotask(() => {
-        if (!closed) void dispatch(input, { sessions, emit, settingsHandle, capabilities });
-      });
-    },
+		async send(input: ProviderInput) {
+			if (closed) throw new Error("Connection closed");
+			validateAdmission(input, { sessions, capabilities });
+			// Dispatch asynchronously so send() resolves immediately, matching
+			// the provider-direct reference implementation.
+			queueMicrotask(() => {
+				if (!closed) void dispatch(input, { sessions, emit, settingsHandle, capabilities });
+			});
+		},
 
-    onEvent(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+		onEvent(listener) {
+			listeners.add(listener);
+			return () => listeners.delete(listener);
+		},
 
-    async close() {
-      if (closed) return;
-      closed = true;
-      for (const session of sessions.values()) {
-        session.dispose();
-      }
-      sessions.clear();
-      listeners.clear();
-    },
-  };
+		async close() {
+			if (closed) return;
+			closed = true;
+			for (const session of sessions.values()) {
+				await session.dispose();
+			}
+			sessions.clear();
+			listeners.clear();
+		},
+	};
 }
 
 interface ConnectionState {
-  sessions: Map<string, EmbeddedSession>;
-  emit(event: ProviderEvent): void;
-  settingsHandle: SettingsHandle;
-  capabilities: readonly string[];
+	sessions: Map<string, EmbeddedSession>;
+	emit(event: ProviderEvent): void;
+	settingsHandle: SettingsHandle;
+	capabilities: readonly string[];
+}
+
+/** Unknown sessions and unsupported capability requests fail the send, like the reference provider. */
+function validateAdmission(
+	input: ProviderInput,
+	state: Pick<ConnectionState, "sessions" | "capabilities">,
+): void {
+	if (input.type === "session.open") {
+		if (state.sessions.has(input.sessionId)) {
+			throw new Error(`Session already exists: ${input.sessionId}`);
+		}
+		requireProviderCapabilities(state.capabilities, input);
+		return;
+	}
+	if (!("sessionId" in input)) {
+		requireProviderCapabilities(state.capabilities, input);
+		return;
+	}
+	if (input.type === "session.prompt" || input.type === "session.permission") {
+		if (!state.sessions.has(input.sessionId)) {
+			throw new Error(`Unknown session: ${input.sessionId}`);
+		}
+	}
+	requireProviderCapabilities(state.capabilities, input);
+}
+
+function errorOf(err: unknown): { message: string } {
+	return { message: err instanceof Error ? err.message : String(err) };
 }
 
 async function dispatch(
-  input: ProviderInput,
-  state: ConnectionState,
+	input: ProviderInput,
+	state: ConnectionState,
 ): Promise<void> {
-  switch (input.type) {
-    case "catalog": {
-      const catalog = await buildCatalog(state.settingsHandle);
-      state.emit({
-        type: "catalog",
-        requestId: input.requestId,
-        catalog,
-      });
-      return;
-    }
+	switch (input.type) {
+		case "catalog": {
+			const catalog = await buildCatalog(state.settingsHandle);
+			state.emit({ type: "catalog", requestId: input.requestId, catalog });
+			return;
+		}
 
-    case "session.open": {
-      try {
-        const session = await EmbeddedSession.create(
-          input.sessionId,
-          input.config,
-          state.settingsHandle,
-          state.emit,
-          input.persistence,
-        );
-        state.sessions.set(input.sessionId, session);
+		case "session.open": {
+			try {
+				const session = await EmbeddedSession.create(
+					input.sessionId,
+					input.config,
+					input.persistence,
+					state.settingsHandle,
+					state.emit,
+				);
+				state.sessions.set(input.sessionId, session);
 
-        state.emit({
-          type: "session.opened",
-          requestId: input.requestId,
-          sessionId: input.sessionId,
-          capabilities: [...state.capabilities],
-          restoration: "core",
-          persistence: session.getPersistence(),
-          cwd: input.config.cwd,
-        });
-        state.emit({
-          type: "session.config",
-          sessionId: input.sessionId,
-          config: session.getConfigState(),
-        });
-        state.emit({
-          type: "session.ready",
-          requestId: input.requestId,
-          sessionId: input.sessionId,
-        });
-      } catch (err: any) {
-        state.emit({
-          type: "session.runtime_failed",
-          sessionId: input.sessionId,
-          error: { message: err?.message || String(err) },
-        });
-        state.emit({
-          type: "request.failed",
-          requestId: input.requestId,
-          error: { message: err?.message || String(err) },
-        });
-      }
-      return;
-    }
+				state.emit({
+					type: "session.opened",
+					requestId: input.requestId,
+					sessionId: input.sessionId,
+					capabilities: [...state.capabilities],
+					restoration: "core",
+					persistence: session.getPersistence(),
+					cwd: input.config.cwd,
+				});
 
-    case "session.prompt": {
-      const session = state.sessions.get(input.sessionId);
-      if (!session) {
-        state.emit({
-          type: "session.prompt_result",
-          sessionId: input.sessionId,
-          clientMessageId: input.prompt.clientMessageId,
-          result: {
-            type: "failed",
-            error: { message: `Session not found: ${input.sessionId}` },
-          },
-        });
-        return;
-      }
+				// Replay the stored conversation when the daemon asks for it
+				// (restored agents must not open with an empty timeline).
+				if (input.history === "replay") {
+					for (const event of session.replayHistory()) {
+						state.emit(event);
+					}
+				}
 
-      let text = "";
-      if (input.prompt.input.type === "message") {
-        text = input.prompt.input.content
-          .filter((c: any) => c.type === "text")
-          .map((c: any) => c.text)
-          .join("\n");
-      } else if (input.prompt.input.type === "command") {
-        text = `/${input.prompt.input.name} ${input.prompt.input.arguments}`;
-      }
+				state.emit({
+					type: "session.config",
+					sessionId: input.sessionId,
+					config: session.getConfigState(),
+				});
+				state.emit({
+					type: "session.ready",
+					requestId: input.requestId,
+					sessionId: input.sessionId,
+				});
+			} catch (err) {
+				state.emit({
+					type: "session.runtime_failed",
+					sessionId: input.sessionId,
+					error: errorOf(err),
+				});
+				state.emit({ type: "request.failed", requestId: input.requestId, error: errorOf(err) });
+			}
+			return;
+		}
 
-      // Emit user message timeline item
-      state.emit({
-        type: "timeline.item",
-        sessionId: input.sessionId,
-        item: {
-          type: "user_message",
-          id: `user-${Date.now()}`,
-          text,
-          clientMessageId: input.prompt.clientMessageId,
-        },
-      });
+		case "session.prompt": {
+			const session = state.sessions.get(input.sessionId);
+			if (!session) return;
 
-      await session.prompt(
-        input.sessionId,
-        text,
-        input.prompt.clientMessageId,
-        input.prompt.delivery,
-        state.emit,
-      );
+			let text = "";
+			const images: PromptImage[] = [];
+			if (input.prompt.input.type === "message") {
+				for (const part of input.prompt.input.content) {
+					if (part.type === "text") {
+						text = text ? `${text}\n${part.text}` : part.text;
+					} else if (part.type === "image") {
+						images.push({ type: "image", data: part.data, mimeType: part.mimeType });
+					}
+				}
+			} else if (input.prompt.input.type === "command") {
+				// Pi has no slash-command surface in embedded mode; surface the
+				// command text verbatim so the model sees the request.
+				text = `/${input.prompt.input.name} ${input.prompt.input.arguments}`.trim();
+			}
 
-      // Persist session state after turn completes
-      state.emit({
-        type: "session.persistence",
-        sessionId: input.sessionId,
-        persistence: session.getPersistence(),
-      });
-      return;
-    }
+			// The session emits the user_message item itself, gated on prompt
+			// acceptance, then drives the turn.
+			await session.prompt(
+				text,
+				images,
+				input.prompt.clientMessageId,
+				input.prompt.delivery,
+				state.emit,
+			);
 
-    case "session.interrupt": {
-      const session = state.sessions.get(input.sessionId);
-      if (session) await session.abort();
-      state.emit({ type: "request.completed", requestId: input.requestId });
-      return;
-    }
+			state.emit({
+				type: "session.persistence",
+				sessionId: input.sessionId,
+				persistence: session.getPersistence(),
+			});
+			return;
+		}
 
-    case "session.configure": {
-      const session = state.sessions.get(input.sessionId);
-      if (session) {
-        await session.configure(input.changes);
-        state.emit({
-          type: "session.config",
-          sessionId: input.sessionId,
-          config: session.getConfigState(),
-        });
-      }
-      state.emit({ type: "request.completed", requestId: input.requestId });
-      return;
-    }
+		case "session.interrupt": {
+			const session = state.sessions.get(input.sessionId);
+			if (session) {
+				try {
+					await session.abort();
+				} catch (err) {
+					console.error("autumn-studio: interrupt failed", err);
+				}
+			}
+			state.emit({ type: "request.completed", requestId: input.requestId });
+			return;
+		}
 
-    case "session.close": {
-      const session = state.sessions.get(input.sessionId);
-      if (session) {
-        session.dispose();
-        state.sessions.delete(input.sessionId);
-      }
-      state.emit({ type: "session.closed", sessionId: input.sessionId });
-      state.emit({ type: "request.completed", requestId: input.requestId });
-      return;
-    }
-  }
+		case "session.configure": {
+			const session = state.sessions.get(input.sessionId);
+			if (session) {
+				const warning = await session.configure(input.changes);
+				if (warning) {
+					state.emit({
+						type: "session.notice",
+						sessionId: input.sessionId,
+						notice: { id: `configure-${Date.now()}`, severity: "warning", title: warning },
+					});
+				}
+				state.emit({
+					type: "session.config",
+					sessionId: input.sessionId,
+					config: session.getConfigState(),
+				});
+			}
+			state.emit({ type: "request.completed", requestId: input.requestId });
+			return;
+		}
+
+		case "session.close": {
+			const session = state.sessions.get(input.sessionId);
+			if (session) {
+				state.sessions.delete(input.sessionId);
+				await session.dispose();
+			}
+			state.emit({ type: "session.closed", sessionId: input.sessionId });
+			state.emit({ type: "request.completed", requestId: input.requestId });
+			return;
+		}
+	}
 }

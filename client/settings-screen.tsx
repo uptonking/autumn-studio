@@ -1,13 +1,15 @@
 import { useMemo } from "react";
 import { ScrollView, Text, View } from "react-native";
-import type { PluginScreenProps } from "@getpaseo/plugin/client";
+import type { PluginSurfaceProps } from "@getpaseo/plugin/client";
 import { useSettings } from "@getpaseo/plugin/client";
 import { SettingsSection, SettingsCard, SettingsAction } from "@getpaseo/plugin/client/ui";
 import { settings } from "../shared/settings.js";
 import { GeneralSettings } from "./general-settings.js";
 import { ProviderSettings } from "./provider-settings.js";
 
-export function AutumnSettingsScreen({ theme, layout }: PluginScreenProps) {
+// Typed with the wider surface props so the same component mounts both as a
+// routed screen (addScreen) and as a settings screen (addSettingsScreen).
+export function AutumnSettingsScreen({ theme, layout }: PluginSurfaceProps) {
   const state = useSettings(settings);
 
   const styles = useMemo(

@@ -11,6 +11,8 @@ export type SettingsHandle = PluginSettings<typeof settings.schema>;
 
 const CAPABILITIES = [
   "prompt.message",
+  "prompt.command",
+  "prompt.image",
   "prompt.steer",
   "session.configure",
   "session.persistence",
