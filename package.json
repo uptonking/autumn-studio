@@ -1,0 +1,15 @@
+{
+  "name": "autumn-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.87.1",
+    "@earendil-works/pi-ai": "^0.87.1"
+  },
+  "devDependencies": {
+    "@getpaseo/plugin": "*",
+    "zod": "*",
+    "typescript": "^5.0.0"
+  }
+}

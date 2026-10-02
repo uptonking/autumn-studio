@@ -1,0 +1,7 @@
+{
+  "id": "autumn-studio",
+  "description": "Bundled AI coding agent powered by Pi — works out of the box",
+  "requirements": {
+    "paseo": ">=0.10.0"
+  }
+}

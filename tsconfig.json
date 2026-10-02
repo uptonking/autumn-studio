@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "declaration": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "paths": {
+      "@getpaseo/plugin": ["../paseo/packages/plugin/src/index.ts"],
+      "@getpaseo/plugin/*": ["../paseo/packages/plugin/src/*"],
+      "zod": ["../paseo/node_modules/zod"],
+      "react-native": ["../paseo/node_modules/react-native"],
+      "@earendil-works/pi-coding-agent": ["../pi/packages/coding-agent/src/index.ts"],
+      "@earendil-works/pi-coding-agent/*": ["../pi/packages/coding-agent/src/*"],
+      "@earendil-works/pi-ai": ["../pi/packages/ai/src/index.ts"],
+      "@earendil-works/pi-ai/*": ["../pi/packages/ai/src/*"]
+    }
+  },
+  "include": ["*.ts", "*.tsx", "shared/**/*", "server/**/*", "client/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

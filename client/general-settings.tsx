@@ -1,0 +1,87 @@
+import { useCallback } from "react";
+import type { SettingsState } from "@getpaseo/plugin/client";
+import {
+  SettingsSection,
+  SettingsCard,
+  SettingsSwitch,
+  SettingsSelect,
+  SettingsInput,
+} from "@getpaseo/plugin/client/ui";
+import type { settings } from "../shared/settings.js";
+
+type ReadySettings = Extract<
+  SettingsState<typeof settings.schema>,
+  { status: "ready" }
+>;
+
+const THINKING_OPTIONS = [
+  { label: "Off (No reasoning budget)", value: "off" },
+  { label: "Low (Quick reasoning)", value: "low" },
+  { label: "Medium (Balanced reasoning)", value: "medium" },
+  { label: "High (Deep reasoning)", value: "high" },
+] as const;
+
+export function GeneralSettings({
+  settings,
+}: {
+  settings: ReadySettings;
+}) {
+  const toggleEnabled = useCallback(
+    (enabled: boolean) => {
+      void settings.save(
+        { ...settings.values, enabled },
+        settings.revision,
+      );
+    },
+    [settings],
+  );
+
+  const changeThinkingLevel = useCallback(
+    (defaultThinkingLevel: "off" | "low" | "medium" | "high") => {
+      void settings.save(
+        { ...settings.values, defaultThinkingLevel },
+        settings.revision,
+      );
+    },
+    [settings],
+  );
+
+  const changeInstructions = useCallback(
+    (customInstructions: string) => {
+      void settings.save(
+        { ...settings.values, customInstructions },
+        settings.revision,
+      );
+    },
+    [settings],
+  );
+
+  return (
+    <SettingsSection title="General">
+      <SettingsCard>
+        <SettingsSwitch
+          label="Enable Autumn Studio"
+          hint="When disabled, Autumn Studio will not appear as an agent provider option"
+          value={settings.values.enabled}
+          disabled={settings.saving}
+          onValueChange={toggleEnabled}
+        />
+        <SettingsSelect
+          label="Default reasoning budget"
+          hint="Thinking budget pre-selected for models that support reasoning"
+          value={settings.values.defaultThinkingLevel}
+          options={THINKING_OPTIONS}
+          disabled={settings.saving}
+          onValueChange={changeThinkingLevel}
+        />
+        <SettingsInput
+          label="Custom system instructions"
+          placeholder="e.g. Always write code in TypeScript; keep explanations concise"
+          initialValue={settings.values.customInstructions}
+          disabled={settings.saving}
+          onChangeText={changeInstructions}
+        />
+      </SettingsCard>
+    </SettingsSection>
+  );
+}
