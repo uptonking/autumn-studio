@@ -23,7 +23,7 @@
  */
 import { createRequire, isBuiltin } from "node:module";
 import { pathToFileURL } from "node:url";
-import { mkdtempSync, existsSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,6 +35,8 @@ const paseoRoot = resolve(process.argv[2] ?? join(pluginRoot, "..", "paseo"));
 
 // Isolated data dirs for the whole test.
 process.env.PASEO_HOME = mkdtempSync(join(tmpdir(), "autumn-integration-"));
+const seededBaseUrl = "http://127.0.0.1:2/v1";
+mkdirSync(join(process.env.PASEO_HOME, "plugin-data", "autumn-studio"), { recursive: true });
 const require2 = createRequire(import.meta.url);
 const cwd = mkdtempSync(join(tmpdir(), "autumn-cwd-"));
 const readFile = join(cwd, "mock-read.txt");
@@ -165,6 +167,19 @@ await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
 const mockPort = server.address().port;
 console.log(`mock LLM server on 127.0.0.1:${mockPort}`);
 
+// Seed the persisted discovery cache: an entry the mock's /v1/models no
+// longer reports (the merge-on-success path must keep it) plus a
+// last-known-good list for the unreachable p3 endpoint.
+writeFileSync(
+	join(process.env.PASEO_HOME, "plugin-data", "autumn-studio", "discovery-cache.json"),
+	JSON.stringify({
+		endpoints: {
+			[seededBaseUrl]: ["seeded-model"],
+			[`http://127.0.0.1:${mockPort}/v1`]: ["historical-model"],
+		},
+	}),
+);
+
 // ---------------------------------------------------------------------------
 // Compile + evaluate the real plugin bundle
 // ---------------------------------------------------------------------------
@@ -200,7 +215,32 @@ const settingsValues = {
 			type: "custom",
 			apiKey: "mock-key",
 			baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+			models: ["gpt-6-luna"],
 			reasoning: true,
+			enabled: true,
+		},
+		{
+			// Unreachable endpoint: discovery must fail without breaking the
+			// entry — its manual models must still reach the catalog.
+			id: "p2",
+			name: "Dead Endpoint",
+			type: "custom",
+			apiKey: "",
+			baseUrl: "http://127.0.0.1:1/v1",
+			models: ["local-mock"],
+			reasoning: false,
+			enabled: true,
+		},
+		{
+			// Unreachable endpoint with NO manual models: the persisted
+			// last-known-good discovery cache must supply its model.
+			id: "p3",
+			name: "Seeded Endpoint",
+			type: "custom",
+			apiKey: "",
+			baseUrl: seededBaseUrl,
+			models: [],
+			reasoning: false,
 			enabled: true,
 		},
 	],
@@ -308,6 +348,12 @@ const catalogModelIds = catalogEvent.catalog.models.map((m) => m.id);
 if (!catalogModelIds.includes("p1/mock-small") || !catalogModelIds.includes("p1/mock-large")) {
 	fail(`catalog missing discovered models; got: ${catalogModelIds.join(", ")}`);
 }
+for (const required of ["p1/mock-small", "p1/mock-large", "p1/gpt-6-luna", "p2/local-mock", "p3/seeded-model", "p1/historical-model"]) {
+	if (!catalogModelIds.includes(required)) {
+		fail(`catalog missing ${required} (manual ∪ discovered broken); got: ${catalogModelIds.join(", ")}`);
+	}
+}
+console.log("PASS: catalog = discovered ∪ manual models, including an unreachable endpoint's entry");
 const smallModel = catalogEvent.catalog.models.find((m) => m.id === "p1/mock-small");
 if (!smallModel?.thinkingOptions || smallModel.thinkingOptions.length !== 4) {
 	fail(`mock-small thinking options missing: ${JSON.stringify(smallModel?.thinkingOptions)}`);

@@ -20,6 +20,8 @@ function providerRowCaption(entry: ProviderEntry): string {
 			parts.push(entry.baseUrl.trim());
 		}
 	}
+	const manualCount = (entry.models ?? []).length;
+	if (manualCount > 0) parts.push(`${manualCount} model${manualCount === 1 ? "" : "s"}`);
 	if (entry.reasoning && isCustomType(entry.type)) parts.push("Reasoning");
 	if (!entry.enabled) parts.push("Disabled");
 	return parts.join(" · ");

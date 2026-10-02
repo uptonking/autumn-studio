@@ -52,6 +52,16 @@ function generateId(): string {
 	return `provider-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+/** "a, b ,,c" → ["a","b","c"] — deduped, order preserved. */
+function parseManualModels(text: string): string[] {
+	return [...new Set(
+		text
+			.split(/[,\n]/)
+			.map((id) => id.trim())
+			.filter((id) => id.length > 0),
+	)];
+}
+
 function getBaseUrlPlaceholder(type: string): string {
 	switch (type) {
 		case "custom":
@@ -95,6 +105,7 @@ export function ProviderEditor({
 				type: "anthropic",
 				apiKey: "",
 				baseUrl: "",
+				models: [],
 				reasoning: false,
 				enabled: true,
 			},
@@ -128,6 +139,7 @@ export function ProviderEditor({
 	const needsBaseUrl = isCustom;
 	const missingKey = !isCustom && draft.apiKey.trim().length === 0;
 	const missingBaseUrl = needsBaseUrl && draft.baseUrl.trim().length === 0;
+	const manualModelsText = (draft.models ?? []).join(", ");
 	const canSave = !missingKey && !missingBaseUrl;
 
 	const isDirty = useMemo(() => {
@@ -137,6 +149,7 @@ export function ProviderEditor({
 				draft.type !== "anthropic" ||
 				draft.apiKey.trim().length > 0 ||
 				draft.baseUrl.trim().length > 0 ||
+				(draft.models ?? []).length > 0 ||
 				draft.reasoning !== false ||
 				!draft.enabled
 			);
@@ -146,6 +159,7 @@ export function ProviderEditor({
 			draft.type !== entry.type ||
 			draft.apiKey !== entry.apiKey ||
 			draft.baseUrl !== entry.baseUrl ||
+			((draft.models ?? []).join(",") !== (entry.models ?? []).join(",")) ||
 			draft.reasoning !== (entry.reasoning ?? false) ||
 			draft.enabled !== entry.enabled
 		);
@@ -188,6 +202,7 @@ export function ProviderEditor({
 			type: draft.type,
 			apiKey: draft.apiKey.trim(),
 			baseUrl: draft.baseUrl.trim(),
+			models: parseManualModels(manualModelsText),
 			reasoning: isCustom ? draft.reasoning : false,
 			enabled: draft.enabled,
 		};
@@ -196,7 +211,7 @@ export function ProviderEditor({
 			: [...settings.values.providers, clean];
 		const ok = await settings.save({ ...settings.values, providers }, settings.revision);
 		if (ok) onClose();
-	}, [canSave, draft, entry, isCustom, onClose, settings]);
+	}, [canSave, draft, entry, isCustom, manualModelsText, onClose, settings]);
 
 	const handleDelete = useCallback(async () => {
 		if (!entry || settings.saving) return;
@@ -308,6 +323,15 @@ export function ProviderEditor({
 							setTestState({ status: "idle" });
 						}}
 					/>
+					{isCustom ? (
+						<SettingsInput
+							label="Models (optional, comma-separated)"
+							hint="Leave empty to auto-discover from /v1/models. Entries here are added to the discovered models and keep the picker working when discovery is broken or slow"
+							initialValue={manualModelsText}
+							placeholder="e.g. gpt-6-luna, claude-sonnet-4"
+							onChangeText={(text) => patch({ models: parseManualModels(text) })}
+						/>
+					) : null}
 					{isCustom ? (
 						<SettingsSwitch
 							label="Supports reasoning"

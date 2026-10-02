@@ -20,6 +20,12 @@ const providerEntrySchema = z.object({
   /** Custom base URL (required for "custom" type, optional override for others). */
   baseUrl: z.string().default(""),
   /**
+   * Manually listed model ids for custom endpoints, comma-separated in the UI.
+   * Registered in addition to whatever /v1/models discovery returns — so the
+   * picker still works when an endpoint's discovery is broken or slow.
+   */
+  models: z.array(z.string()).default([]),
+  /**
    * Whether this endpoint's models support reasoning. Custom OpenAI-compatible
    * endpoints only — known providers get reasoning from pi's built-in catalogs.
    * When on, models expose reasoning-effort options in the chatbox and pi sends

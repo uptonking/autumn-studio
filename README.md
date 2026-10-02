@@ -18,6 +18,11 @@ AI coding agent bundled as a standalone Paseo plugin. Powered by an embedded [Pi
   sends OpenAI-style `reasoning_effort` to the endpoint.
 - **Custom endpoint discovery**: OpenAI-compatible endpoints are probed at
 `/v1/models` , so their model lists appear in the picker without manual entry.
+  Successful discoveries are cached to disk and accumulated (a flaky network
+  path returning a truncated catalog can never shrink the list), so a slow or
+  broken endpoint degrades to the last-known-good list; you can also list models
+  manually per entry ("Models" field in the editor) — manual entries always reach
+  the picker.
 - **Provider CRUD pages**: The settings page shows the provider list; tapping a row
   (or "Add provider") opens a dedicated editor page with a back control — type, name, 
   key, base URL, reasoning toggle, enable switch, test connection, save, and delete

@@ -31,8 +31,12 @@ export function createAutumnProvider(
     async getCatalogCacheKey() {
       const state = await settingsHandle.read();
       if (state.status !== "ready") return "unconfigured";
+      // Bump when catalog-building behavior changes: a new key forces the
+      // daemon to re-fetch the catalog after a plugin upgrade, instead of
+      // serving a snapshot built by older code.
+      const CATALOG_KEY_VERSION = 2;
       const hash = createHash("sha256")
-        .update(JSON.stringify(state.values))
+        .update(`${CATALOG_KEY_VERSION}:${JSON.stringify(state.values)}`)
         .digest("hex")
         .slice(0, 16);
       return `providers:${hash}`;
