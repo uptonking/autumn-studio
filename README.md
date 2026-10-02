@@ -124,3 +124,7 @@ autumn-studio/
     ├── smoke-test-vendor.mjs# Daemon-context evaluation + session smoke test
     └── test-compile.mjs     # Real Paseo compiler end-to-end test
 ```
+
+## License
+
+[AGPL-3.0](./LICENSE.md)
