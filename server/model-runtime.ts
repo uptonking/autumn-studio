@@ -73,13 +73,13 @@ async function probeOpenAiModels(baseUrl: string, apiKey: string | undefined): P
 	}
 }
 
-function customModelDefinition(id: string) {
+function customModelDefinition(id: string, reasoning: boolean) {
 	return {
 		id,
 		name: id,
 		contextWindow: 65536,
 		maxTokens: 8192,
-		reasoning: false,
+		reasoning,
 		// Claim image input: prompt images pass through as OpenAI-style image
 		// parts, and endpoints that can't accept them fail with a clear error
 		// the agent relays. Pretending text-only would hard-block capable ones.
@@ -129,7 +129,9 @@ export async function buildModelRuntime(
 				name: entry.name || entry.id,
 				baseUrl: entry.baseUrl,
 				api: "openai-completions",
-				models: modelIds.map(customModelDefinition),
+				// reasoning: true makes pi's OpenAI-completions adapter send
+				// reasoning_effort for low/medium/high and omit it for off.
+				models: modelIds.map((id) => customModelDefinition(id, entry.reasoning === true)),
 			});
 			await runtime.setRuntimeApiKey(entry.id, entry.apiKey || "dummy-key");
 		} else if (KNOWN_TYPES.has(entry.type)) {

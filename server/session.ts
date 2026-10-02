@@ -56,6 +56,8 @@ export class EmbeddedSession {
 	private currentModel: string | undefined;
 	private currentThinking: ThinkingLevel;
 	private closed = false;
+	private readonly disposed: Promise<void>;
+	private resolveDisposed!: () => void;
 
 	private constructor(
 		sessionId: string,
@@ -79,6 +81,9 @@ export class EmbeddedSession {
 		this.models = models;
 		this.currentModel = currentModel;
 		this.currentThinking = currentThinking;
+		this.disposed = new Promise<void>((resolve) => {
+			this.resolveDisposed = resolve;
+		});
 	}
 
 	static async create(
@@ -233,6 +238,9 @@ export class EmbeddedSession {
 		delivery: "auto" | "steer",
 		emit: (event: ProviderEvent) => void,
 	): Promise<void> {
+		// A closed session emits nothing — the daemon already saw session.closed.
+		if (this.closed) return;
+
 		// The user_message item is emitted here, on acceptance only — a steer
 		// with no active turn must not leave a ghost message in the timeline.
 		const emitUserMessage = () => {
@@ -305,7 +313,11 @@ export class EmbeddedSession {
 		}
 
 		try {
-			await this.piSession.prompt(text, images.length > 0 ? { images } : undefined);
+			// dispose() during an active turn resolves this race instead of the
+			// prompt promise — nothing is emitted for a session the daemon
+			// already closed.
+			await Promise.race([this.piSession.prompt(text, images.length > 0 ? { images } : undefined), this.disposed]);
+			if (this.closed) return;
 			// abort() resolves the pending prompt() early — report it as
 			// canceled, not completed.
 			emit({
@@ -315,6 +327,7 @@ export class EmbeddedSession {
 				state: this.abortRequested ? "canceled" : "completed",
 			});
 		} catch (error) {
+			if (this.closed) return;
 			emit({
 				type: "session.turn",
 				sessionId: this.sessionId,
@@ -379,8 +392,17 @@ export class EmbeddedSession {
 	async dispose(): Promise<void> {
 		if (this.closed) return;
 		this.closed = true;
+		this.resolveDisposed();
 		this.unsubscribe();
 		if (this.mcpBridge) await this.mcpBridge.dispose();
+		// Best-effort unwind of an active turn so pi releases its run state
+		// before disposal; errors here must not block the close.
+		if (this.activeTurnRef.current) {
+			await Promise.race([
+				this.piSession.abort().catch(() => {}),
+				new Promise((resolve) => setTimeout(resolve, 2000)),
+			]);
+		}
 		this.piSession.dispose();
 	}
 }

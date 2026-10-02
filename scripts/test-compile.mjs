@@ -13,13 +13,9 @@ import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import process from "node:process";
 
-const paseoRoot = process.argv[2];
-if (!paseoRoot) {
-	console.error("usage: node scripts/test-compile.mjs <path-to-paseo-repo>");
-	process.exit(1);
-}
-
 const pluginRoot = path.resolve(import.meta.dirname, "..");
+// Defaults to the sibling paseo checkout, like the other scripts.
+const paseoRoot = path.resolve(process.argv[2] ?? path.join(pluginRoot, "..", "paseo"));
 const require2 = createRequire(import.meta.url);
 const compiler = await import(
 	pathToFileURL(path.join(paseoRoot, "packages/server/dist/server/server/plugins/compiler.js")).href

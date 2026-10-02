@@ -32,12 +32,7 @@ export function createAutumnProvider(
       const state = await settingsHandle.read();
       if (state.status !== "ready") return "unconfigured";
       const hash = createHash("sha256")
-        .update(
-          JSON.stringify({
-            enabled: state.values.enabled,
-            providers: state.values.providers,
-          }),
-        )
+        .update(JSON.stringify(state.values))
         .digest("hex")
         .slice(0, 16);
       return `providers:${hash}`;

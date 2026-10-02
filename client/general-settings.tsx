@@ -48,8 +48,8 @@ export function GeneralSettings({ settings }: { settings: ReadySettings }) {
 					onValueChange={toggleEnabled}
 				/>
 				<SettingsSelect
-					label="Default reasoning budget"
-					hint="Thinking budget pre-selected for models that support reasoning"
+					label="Default reasoning effort"
+					hint="Pre-selected effort for reasoning models; changeable per chat in the model picker"
 					value={settings.values.defaultThinkingLevel}
 					options={THINKING_OPTIONS}
 					disabled={settings.saving}

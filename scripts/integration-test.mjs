@@ -45,6 +45,7 @@ writeFileSync(readFile, "mock-read-content-line\n");
 // ---------------------------------------------------------------------------
 
 let llmCalls = 0;
+const llmBodies = [];
 
 function chunk(id, index, delta, finish = null, extra = {}) {
 	return {
@@ -55,6 +56,20 @@ function chunk(id, index, delta, finish = null, extra = {}) {
 		choices: [{ index, delta, finish_reason: finish }],
 		...extra,
 	};
+}
+
+/** Last user message text of a chat-completions request body. */
+function lastUserText(body) {
+	const messages = Array.isArray(body?.messages) ? body.messages : [];
+	for (let i = messages.length - 1; i >= 0; i--) {
+		const message = messages[i];
+		if (message?.role !== "user") continue;
+		if (typeof message.content === "string") return message.content;
+		if (Array.isArray(message.content)) {
+			return message.content.filter((c) => c.type === "text").map((c) => c.text ?? "").join(" ");
+		}
+	}
+	return "";
 }
 
 function sse(res, chunks, intervalMs = 15) {
@@ -91,6 +106,11 @@ const server = http.createServer((req, res) => {
 		req.on("data", (chunk) => (body += chunk));
 		req.on("end", () => {
 			llmCalls++;
+			let parsed = {};
+			try {
+				parsed = JSON.parse(body);
+			} catch {}
+			llmBodies.push(parsed);
 			const id = `chatcmpl-${llmCalls}`;
 			const call = (n) => ({
 				index: 0,
@@ -120,8 +140,8 @@ const server = http.createServer((req, res) => {
 				]);
 				return;
 			}
-			if (llmCalls === 3) {
-				// Turn 3: slow stream, aborted mid-flight by session.interrupt.
+			if (lastUserText(parsed).includes("keep going")) {
+				// Slow stream for the interrupt and close-mid-turn scenarios.
 				const chunks = [chunk(id, 0, { role: "assistant", content: "" })];
 				for (let i = 0; i < 24; i++) chunks.push(chunk(id, 0, { content: "x" }));
 				sse(res, chunks, 250);
@@ -180,6 +200,7 @@ const settingsValues = {
 			type: "custom",
 			apiKey: "mock-key",
 			baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+			reasoning: true,
 			enabled: true,
 		},
 	],
@@ -262,7 +283,6 @@ function openSession(sessionId, model, persistence) {
 			env: {},
 			mcpServers: {},
 			model,
-			thinkingOption: "off",
 			settings: {},
 			persist: true,
 		},
@@ -288,7 +308,17 @@ const catalogModelIds = catalogEvent.catalog.models.map((m) => m.id);
 if (!catalogModelIds.includes("p1/mock-small") || !catalogModelIds.includes("p1/mock-large")) {
 	fail(`catalog missing discovered models; got: ${catalogModelIds.join(", ")}`);
 }
-console.log(`PASS: catalog lists discovered models: ${catalogModelIds.join(", ")}`);
+const smallModel = catalogEvent.catalog.models.find((m) => m.id === "p1/mock-small");
+if (!smallModel?.thinkingOptions || smallModel.thinkingOptions.length !== 4) {
+	fail(`mock-small thinking options missing: ${JSON.stringify(smallModel?.thinkingOptions)}`);
+}
+if (smallModel.defaultThinkingOptionId !== "medium") {
+	fail(`mock-small default thinking option is ${smallModel.defaultThinkingOptionId}, expected "medium" from settings`);
+}
+if (smallModel.thinkingOptions.find((o) => o.id === "medium")?.isDefault !== true) {
+	fail("medium effort not flagged isDefault in catalog thinking options");
+}
+console.log(`PASS: catalog model carries reasoning efforts with default "${smallModel.defaultThinkingOptionId}"`);
 
 // 2. Session open with selectable models in the config state.
 openSession("s1", "p1/mock-small");
@@ -298,7 +328,12 @@ await waitFor("session.ready", (e) => e.type === "session.ready" && e.sessionId 
 if (!Array.isArray(configEvent.config.models) || configEvent.config.models.length < 2) {
 	fail(`session.config models empty (${configEvent.config.models?.length}) — in-session model switcher would be broken`);
 }
-console.log(`PASS: session open; config carries ${configEvent.config.models.length} selectable models`);
+if (configEvent.config.thinkingOption !== "medium") {
+	fail(`session config thinking option is ${configEvent.config.thinkingOption}, expected settings default "medium"`);
+}
+const configModel = configEvent.config.models.find((m) => m.id === "p1/mock-small");
+if (!configModel?.thinkingOptions?.length) fail("session.config model lacks thinking options");
+console.log(`PASS: session open; default reasoning effort "${configEvent.config.thinkingOption}" with ${configEvent.config.models.length} selectable models`);
 
 // 3. Steer with no active turn must fail fast.
 prompt("s1", "steer-1", "too early", "steer");
@@ -322,6 +357,10 @@ if (!events.some((e) => e.type === "timeline.item" && e.item.type === "assistant
 const usageEvent = events.find((e) => e.type === "session.usage");
 if (!usageEvent || !(usageEvent.usage.inputTokens > 0)) fail(`usage missing or zero: ${JSON.stringify(usageEvent?.usage)}`);
 console.log(`PASS: turn 1 completed; usage input=${usageEvent.usage.inputTokens} output=${usageEvent.usage.outputTokens}`);
+if (llmBodies[0]?.reasoning_effort !== "medium") {
+	fail(`first completion reasoning_effort is ${JSON.stringify(llmBodies[0]?.reasoning_effort)}, expected "medium"`);
+}
+console.log('PASS: reasoning_effort "medium" sent to the endpoint');
 
 // 5. Prompt 2: reasoning delta + read tool detail mapping.
 prompt("s1", "msg-2", "Read mock-read.txt.");
@@ -348,10 +387,25 @@ const canceled = await waitFor("turn 3 canceled", (e) => e.type === "session.tur
 if (canceled.state !== "canceled") fail(`interrupted turn ended as ${canceled.state}, expected canceled`);
 console.log("PASS: interrupt mid-stream → turn canceled");
 
-// 7. Prompt 4: a clean turn still completes after the cancel.
+// 7. Switch the reasoning effort to high, then run a clean turn after the cancel.
+connection.send({
+	type: "session.configure",
+	requestId: "req-effort",
+	sessionId: "s1",
+	changes: { thinkingOption: "high" },
+});
+await waitFor("config effort high", (e) => e.type === "session.config" && e.sessionId === "s1" && e.config.thinkingOption === "high");
+console.log('PASS: reasoning effort switched to "high" mid-session');
+const callCountBeforeTurn4 = llmCalls;
 prompt("s1", "msg-4", "Summarize.");
 await waitFor("turn 4 completed", (e) => e.type === "session.turn" && e.state === "completed" && events.filter((x) => x.type === "session.turn" && x.state === "completed").length >= 3);
 console.log("PASS: clean turn completes after cancel");
+const efforts = llmBodies.map((b, i) => `#${i + 1}:${b.reasoning_effort ?? "(none)"}`).join(" ");
+const turn4Body = llmBodies[callCountBeforeTurn4];
+if (turn4Body?.reasoning_effort !== "high") {
+	fail(`post-switch reasoning_effort is ${JSON.stringify(turn4Body?.reasoning_effort)}, expected "high"; all calls: ${efforts}`);
+}
+console.log('PASS: reasoning_effort "high" sent after the switch');
 
 // 8. Persistence: a real session file must exist on disk.
 const persistenceEvent = events.filter((e) => e.type === "session.persistence").at(-1);
@@ -400,6 +454,34 @@ console.log("PASS: restored session accepts prompts");
 
 connection.send({ type: "session.close", requestId: "req-close-2", sessionId: "s2" });
 await waitFor("s2 closed", (e) => e.type === "session.closed" && e.sessionId === "s2");
+console.log("PASS: restored session closed");
+
+// 12. Close during an active turn: dispose must unwind promptly, emit nothing
+// for the dead session afterwards, and leave the connection usable.
+openSession("s3", "p1/mock-small");
+await waitFor("s3 ready", (e) => e.type === "session.ready" && e.sessionId === "s3");
+prompt("s3", "msg-6", "Start talking and keep going.");
+await waitFor("s3 turn started", (e) => e.type === "session.turn" && e.state === "started" && e.sessionId === "s3");
+await waitFor("s3 streaming", (e) => e.type === "timeline.item" && e.item?.type === "assistant_message" && e.sessionId === "s3");
+connection.send({ type: "session.close", requestId: "req-close-3", sessionId: "s3" });
+await waitFor("s3 closed", (e) => e.type === "session.closed" && e.sessionId === "s3");
+const s3EventsAtClose = events.filter((e) => e.sessionId === "s3").length;
+await new Promise((resolve) => setTimeout(resolve, 500));
+const s3EventsAfter = events.filter((e) => e.sessionId === "s3").length;
+if (s3EventsAfter !== s3EventsAtClose) {
+	fail(`s3 emitted ${s3EventsAfter - s3EventsAtClose} events after close`);
+}
+console.log("PASS: close mid-turn unwinds cleanly with no post-close events");
+
+// 13. The connection still works after the mid-turn close.
+openSession("s4", "p1/mock-small");
+await waitFor("s4 ready", (e) => e.type === "session.ready" && e.sessionId === "s4");
+prompt("s4", "msg-7", "Summarize.");
+await waitFor("s4 turn completed", (e) => e.type === "session.turn" && e.state === "completed" && e.sessionId === "s4");
+connection.send({ type: "session.close", requestId: "req-close-4", sessionId: "s4" });
+await waitFor("s4 closed", (e) => e.type === "session.closed" && e.sessionId === "s4");
+console.log("PASS: connection usable after mid-turn close");
+
 await connection.close();
 server.close();
 console.log(`INFO: mock LLM served ${llmCalls} completions`);

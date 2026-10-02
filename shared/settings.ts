@@ -19,6 +19,13 @@ const providerEntrySchema = z.object({
   apiKey: z.string().default(""),
   /** Custom base URL (required for "custom" type, optional override for others). */
   baseUrl: z.string().default(""),
+  /**
+   * Whether this endpoint's models support reasoning. Custom OpenAI-compatible
+   * endpoints only — known providers get reasoning from pi's built-in catalogs.
+   * When on, models expose reasoning-effort options in the chatbox and pi sends
+   * OpenAI-style reasoning_effort.
+   */
+  reasoning: z.boolean().default(false),
   /** Whether this provider entry is enabled. */
   enabled: z.boolean().default(true),
 });
