@@ -7,8 +7,8 @@ import { requireProviderCapabilities } from "@getpaseo/plugin/server/provider";
 import type { PluginSettings } from "@getpaseo/plugin/server";
 import type { settings } from "../shared/settings.js";
 import type { PromptImage } from "./session.js";
-import { buildCatalog } from "./catalog.js";
-import { EmbeddedSession } from "./session.js";
+import { buildProviderCatalog } from "./catalog.js";
+import { PiRpcSession } from "./session.js";
 
 type SettingsHandle = PluginSettings<typeof settings.schema>;
 
@@ -17,7 +17,7 @@ export function createAutumnConnection(
 	settingsHandle: SettingsHandle,
 ): ProviderConnection {
 	const listeners = new Set<(event: ProviderEvent) => void>();
-	const sessions = new Map<string, EmbeddedSession>();
+	const sessions = new Map<string, PiRpcSession>();
 	let closed = false;
 
 	const emit = (event: ProviderEvent) => {
@@ -63,7 +63,7 @@ export function createAutumnConnection(
 }
 
 interface ConnectionState {
-	sessions: Map<string, EmbeddedSession>;
+	sessions: Map<string, PiRpcSession>;
 	emit(event: ProviderEvent): void;
 	settingsHandle: SettingsHandle;
 	capabilities: readonly string[];
@@ -103,14 +103,20 @@ async function dispatch(
 ): Promise<void> {
 	switch (input.type) {
 		case "catalog": {
-			const catalog = await buildCatalog(state.settingsHandle);
-			state.emit({ type: "catalog", requestId: input.requestId, catalog });
+			try {
+				const catalog = await buildProviderCatalog(state.settingsHandle);
+				state.emit({ type: "catalog", requestId: input.requestId, catalog });
+			} catch (err) {
+				// A failed catalog build must surface as request.failed, not as an
+				// unhandled rejection in the dispatch microtask.
+				state.emit({ type: "request.failed", requestId: input.requestId, error: errorOf(err) });
+			}
 			return;
 		}
 
 		case "session.open": {
 			try {
-				const session = await EmbeddedSession.create(
+				const session = await PiRpcSession.create(
 					input.sessionId,
 					input.config,
 					input.persistence,
@@ -132,7 +138,7 @@ async function dispatch(
 				// Replay the stored conversation when the daemon asks for it
 				// (restored agents must not open with an empty timeline).
 				if (input.history === "replay") {
-					for (const event of session.replayHistory()) {
+					for (const event of await session.replayHistory()) {
 						state.emit(event);
 					}
 				}
@@ -142,6 +148,14 @@ async function dispatch(
 					sessionId: input.sessionId,
 					config: session.getConfigState(),
 				});
+
+				// Native pi slash commands (skills, prompt commands) surface for
+				// the composer; invocation flows through the normal prompt path.
+				const commands = await session.getCommands();
+				if (commands.length > 0) {
+					state.emit({ type: "session.commands", sessionId: input.sessionId, commands });
+				}
+
 				state.emit({
 					type: "session.ready",
 					requestId: input.requestId,
@@ -173,8 +187,8 @@ async function dispatch(
 					}
 				}
 			} else if (input.prompt.input.type === "command") {
-				// Pi has no slash-command surface in embedded mode; surface the
-				// command text verbatim so the model sees the request.
+				// pi handles slash prompts natively in RPC mode (the commands
+				// surfaced via session.commands); send the text verbatim.
 				text = `/${input.prompt.input.name} ${input.prompt.input.arguments}`.trim();
 			}
 
@@ -212,13 +226,19 @@ async function dispatch(
 		case "session.configure": {
 			const session = state.sessions.get(input.sessionId);
 			if (session) {
-				const warning = await session.configure(input.changes);
-				if (warning) {
-					state.emit({
-						type: "session.notice",
-						sessionId: input.sessionId,
-						notice: { id: `configure-${Date.now()}`, severity: "warning", title: warning },
-					});
+				try {
+					const warning = await session.configure(input.changes);
+					if (warning) {
+						state.emit({
+							type: "session.notice",
+							sessionId: input.sessionId,
+							notice: { id: `configure-${Date.now()}`, severity: "warning", title: warning },
+						});
+					}
+				} catch (err) {
+					// configure() is guarded internally; this is belt-and-braces so
+					// dispatch never rejects.
+					console.error("autumn-studio: configure failed", err);
 				}
 				state.emit({
 					type: "session.config",

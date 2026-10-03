@@ -1,4 +1,5 @@
-import type { VendorAgentSession, VendorSessionEntry } from "./pi-sdk.cjs";
+import type { RpcProcess } from "./rpc-process.js";
+import type { PiSessionEntry } from "./pi-rpc-types.js";
 import type {
 	ProviderEvent,
 	ProviderToolCallDetail,
@@ -6,10 +7,12 @@ import type {
 } from "@getpaseo/plugin/server/provider";
 
 /**
- * Maps pi's tool execution lifecycle into Paseo's ProviderToolCallDetail.
- * Tool argument shapes follow pi's built-in tools: bash{command}, read{path},
- * write{path,content}, edit{edits[]|oldText/newText}.
+ * Maps pi's RPC event stream (newline-delimited JSON frames from the child)
+ * into Paseo ProviderEvents. Turn lifecycle (agent_end / agent_settled) is
+ * deliberately NOT handled here — the session owns turn state; this mapper
+ * owns the timeline.
  */
+
 /**
  * Pi tool results arrive as structured AgentToolResult objects
  * ({content: [{type:"text"|"image", ...}], ...}); flatten them to the text
@@ -88,12 +91,12 @@ function safeJsonParse(text: string): unknown {
 }
 
 /**
- * Subscribes to a pi AgentSession and forwards events as Paseo ProviderEvents.
- * Returns an unsubscribe cleanup function.
+ * Subscribes to the pi child's event stream and forwards events as Paseo
+ * ProviderEvents. Returns an unsubscribe cleanup function.
  */
-export function mapPiEvents(
+export function mapPiRpcEvents(
 	sessionId: string,
-	piSession: VendorAgentSession,
+	proc: RpcProcess,
 	emit: (event: ProviderEvent) => void,
 	getTurnId: () => string | null,
 ): () => void {
@@ -112,7 +115,7 @@ export function mapPiEvents(
 		accumulatedThinkingText = "";
 	};
 
-	return piSession.subscribe((event: { type: string; [key: string]: unknown }) => {
+	return proc.onEvent((event) => {
 		switch (event.type) {
 			case "turn_start": {
 				startNewAssistantMessage();
@@ -289,18 +292,73 @@ export function mapPiEvents(
 				});
 				break;
 			}
+
+			case "extension_ui_request": {
+				respondToExtensionUi(sessionId, proc, event, emit);
+				break;
+			}
 		}
 	});
+}
+
+/**
+ * pi has no tool-permission protocol; extension_ui_request frames are the
+ * extension dialog subprotocol (OAuth sign-ins, MCP confirmations, etc.).
+ * Paseo sessions have no dialog surface yet, so blocking dialogs are
+ * cancelled with a visible notice and fire-and-forget notifications render
+ * as timeline notifications.
+ */
+function respondToExtensionUi(
+	sessionId: string,
+	proc: RpcProcess,
+	event: Record<string, unknown>,
+	emit: (event: ProviderEvent) => void,
+): void {
+	const id = typeof event.id === "string" ? event.id : "";
+	const method = event.method as string;
+	const title = typeof event.title === "string" ? event.title : method;
+
+	if (method === "notify") {
+		const message = typeof event.message === "string" ? event.message : "";
+		if (message) {
+			emit({
+				type: "timeline.item",
+				sessionId,
+				item: {
+					type: "notification",
+					id: `ext-notify-${Date.now()}`,
+					level: event.notifyType === "error" ? "error" : "info",
+					message,
+				},
+			});
+		}
+		return;
+	}
+
+	if (method === "select" || method === "confirm" || method === "input" || method === "editor") {
+		proc.notify({ type: "extension_ui_response", id, cancelled: true });
+		emit({
+			type: "session.notice",
+			sessionId,
+			notice: {
+				id: `ext-dialog-${Date.now()}`,
+				severity: "info",
+				title: `Pi extension dialog dismissed: ${title}`,
+			},
+		});
+	}
+	// setStatus / setWidget / setTitle / set_editor_text have no Paseo surface.
 }
 
 type ReplayItem = ProviderTimelineItem;
 
 /**
- * Maps stored pi session entries into Paseo timeline items for
- * `session.open` with `history: "replay"`. Tool calls are emitted once, at
- * their result, so cards render completed with output attached.
+ * Maps stored pi session entries (from the `get_entries` RPC) into Paseo
+ * timeline items for `session.open` with `history: "replay"`. Tool calls are
+ * emitted once, at their result, so cards render completed with output
+ * attached.
  */
-export function mapReplayEntries(entries: readonly VendorSessionEntry[]): ReplayItem[] {
+export function mapReplayEntries(entries: readonly PiSessionEntry[]): ReplayItem[] {
 	const items: ReplayItem[] = [];
 	const pendingCalls = new Map<string, { id: string; name: string; args: unknown }>();
 	let counter = 0;
@@ -308,8 +366,8 @@ export function mapReplayEntries(entries: readonly VendorSessionEntry[]): Replay
 	const nextId = (prefix: string) => `${prefix}-replay-${++counter}`;
 
 	for (const entry of entries) {
-		if (entry.type !== "message") continue;
-		const message = entry.message as ReplayMessage;
+		if (entry.type !== "message" || !entry.message) continue;
+		const message = entry.message;
 		const parts = Array.isArray(message.content) ? message.content : [];
 		if (message.role === "user") {
 			const text = typeof message.content === "string"
@@ -362,21 +420,4 @@ export function mapReplayEntries(entries: readonly VendorSessionEntry[]): Replay
 	}
 
 	return items;
-}
-
-type ReplayContent = {
-	type: string;
-	text?: string;
-	thinking?: string;
-	id?: string;
-	name?: string;
-	arguments?: unknown;
-};
-
-interface ReplayMessage {
-	role: string;
-	content?: string | ReplayContent[];
-	toolCallId?: string;
-	toolName?: string;
-	isError?: boolean;
 }

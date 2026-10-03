@@ -22,4 +22,4 @@
     }
   },
   "include": ["*.ts", "*.tsx", "shared/**/*", "server/**/*", "client/**/*"],
-  "exclude": ["node_modules", "dist", "vendor-entry.ts", "scripts"]}
+  "exclude": ["node_modules", "dist", "scripts"]}

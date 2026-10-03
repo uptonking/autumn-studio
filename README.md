@@ -1,18 +1,18 @@
 # Autumn Studio — Paseo Plugin
 
-AI coding agent bundled as a standalone Paseo plugin. Powered by an embedded [Pi](https://github.com/earendil-works/pi) agent — no external agent binaries required. Install the plugin, add an LLM API key, and the standard Paseo chat UX works out of the box.
+AI coding agent bundled as a standalone Paseo plugin. Powered by [Pi](https://github.com/earendil-works/pi) — no external agent binaries required. Install the plugin, add an LLM API key, and the familiar Paseo chat UX works out of the box.
 
 ## Features
 
-- **Embedded Pi Coding Agent**: Pi runs inside the daemon's plugin subprocess via a vendored SDK bundle ( `server/pi-sdk.cjs` ) — no `pi` binary on PATH, no CLI.
 - **Multiple LLM Providers**: Configure Anthropic, OpenAI, Google Gemini, DeepSeek, 
   OpenRouter, Groq, Mistral, xAI, Together AI, Fireworks, or any custom
   OpenAI-compatible endpoint (Ollama, vLLM, LM Studio). Models from all enabled
   providers appear in the model picker.
-- **Seamless Chat Integration**: Streaming responses, tool cards, thinking blocks, 
+- **Chat integration**: streaming responses, tool cards, thinking blocks, 
   steering, interrupt (reported as canceled), model/thinking switching mid-session, 
   prompt image passthrough, usage, and session restore after daemon restart.
-- **Reasoning effort control**: The "Default reasoning budget" setting pre-selects the
+  Native pi slash commands/skills surface via `session.commands` .
+- **Reasoning effort control**: The "Default reasoning effort" setting pre-selects the
   reasoning effort in the chatbox model picker; users can pick another effort per chat.
   Custom endpoints opt in per provider with the "Supports reasoning" toggle — pi then
   sends OpenAI-style `reasoning_effort` to the endpoint.
@@ -28,14 +28,10 @@ AI coding agent bundled as a standalone Paseo plugin. Powered by an embedded [Pi
   key, base URL, reasoning toggle, enable switch, test connection, save, and delete
   live there.
 - **External Pi reuse**: LLM providers already configured for an external pi
-  installation (`~/.pi/agent` `auth.json` + `models.json`) are auto-detected — their models appear in the chatbox picker with zero setup.
-- **Paseo tool wiring**: Paseo's injected MCP servers are bridged into the embedded
-  agent as `mcp__<server>__<tool>` custom tools.
+  installation ( `~/.pi/agent`  `auth.json` + `models.json` ) are auto-detected — their
+  models appear in the chatbox picker with zero setup, marked with an eye marker.
 - **Dedicated Sidebar Menu**: The **Autumn Studio** sidebar item (below Schedules)
   opens the settings screen; the same screen is mounted under Settings → Plugins.
-- **Isolated configuration**: The embedded agent uses its own agent dir under
-`$PASEO_HOME/plugin-data/autumn-studio/` — the user's external `~/.pi/agent` setup is
-  never read or written.
 
 ## Installation
 
@@ -46,6 +42,13 @@ paseo daemon config set pluginsEnabled true
 # Install the Autumn Studio plugin from its directory
 paseo plugin install /path/to/autumn-studio
 ```
+
+The manifest build step runs `npm install` (which brings the bundled pi into the
+plugin's `node_modules` ) and writes the plugin-root anchor the server uses to
+locate its runner script. The anchor is also self-healed at runtime: if it is
+missing (e.g. an app-side "reload", which recompiles without running the build
+step), the plugin resolves its directory from the daemon's plugin registry in
+`$PASEO_HOME/config.json` and rewrites the anchor itself.
 
 ## Configuration
 
@@ -70,77 +73,38 @@ paseo plugin install /path/to/autumn-studio
 ```bash
 npm install
 npm run typecheck         # tsc --noEmit (needs ../paseo sources)
-npm run build:vendor      # rebuild server/pi-sdk.cjs after changing vendor-entry.ts or pi
-npm run smoke-test        # evaluate the vendor bundle in the daemon's eval context
 npm run integration-test  # real compiler + full provider flow vs a mock LLM (see below)
 node scripts/test-compile.mjs <path-to-paseo-repo>   # real Paseo compiler pass
 ```
 
 The integration test requires the paseo repo to have `npm install` +
 `npm run build:client` + `npm run build:server` done. It compiles the plugin with the
-real Paseo compiler, serves a mock OpenAI-compatible LLM locally, and drives the
-contributed provider through catalog discovery, session open, a real bash-tool turn, 
-reasoning + read-tool mapping, interrupt (canceled), usage, persistence, a mid-session
-model switch, and history replay after reopen — all under a temp `PASEO_HOME` . It also
-asserts the reasoning-effort chain end-to-end: the catalog carries the configured
-default effort, the session opens at that default, `reasoning_effort` reaches the
-endpoint, and a mid-session effort switch takes effect on the next turn. It also
-closes a session mid-turn and verifies the close unwinds cleanly, emits nothing for
-the dead session, and leaves the connection usable.
+real Paseo compiler, evaluates the bundle in the daemon-style eval context, serves a
+mock OpenAI-compatible LLM locally, and drives the contributed provider through catalog
+discovery (real probe children), session opens with real pi children, a bash-tool turn
+that proves the session env reaches the child, reasoning + read-tool mapping, interrupt
+(canceled), `reasoning_effort` wire checks, usage, persistence, a mid-session model
+switch, history replay after reopen, a mid-turn close (silence + no orphans), and
+external-reuse end-to-end (external models streaming, external dir untouched) — all
+under a temp `PASEO_HOME` .
 
-The vendored bundle ( `server/pi-sdk.cjs` ) is a **generated artifact, not committed**:
-it is built from the npm-installed `@earendil-works/pi-*` packages — never from pi's
-source tree — by the manifest `build` step when the plugin is installed or updated
-(`paseo-plugin.json` → `npm install` + `npm run build:vendor`). Rebuild locally with
-`npm run build:vendor` after changing `vendor-entry.ts` or bumping pi versions; the
-test scripts rebuild it automatically when missing. The pre-bundle exists because
-importing the pi package directly is impossible inside a plugin: its package entry
-pulls in the interactive TUI, its dist code reads `import.meta.url` / `__filename`
-at module scope (which crashes the daemon's eval-based bundle loader), and its
-published type graph does not resolve outside its own tree (the Paseo compiler walks
-type declarations). Keep `server/pi-sdk.d.cts` free of external imports for the same
-reason.
+## How it works
 
-## Directory Structure
+Pi ships inside the plugin as an npm dependency ( `@earendil-works/pi-coding-agent` ). Sessions spawn it as a child process in RPC mode — `node server/pi-runner.mjs` resolves pi's bundled RPC entry and speaks newline-delimited JSON over stdio. The same RPC protocol Paseo's built-in Pi provider exercises, so protocol compatibility is pi's problem; upgrading pi is a version bump. There is no `pi` binary on PATH and no CLI: to the user it is 100% Autumn Studio.
 
-```text
-autumn-studio/
-├── paseo-plugin.json        # Manifest: plugin ID and version requirements (>=0.11.0)
-├── package.json             # Dependencies and dev scripts
-├── tsconfig.json            # Typecheck config
-├── icon.svg                 # Provider picker icon
-├── index.server.ts          # Server entry: provider & settings registration
-├── index.client.tsx         # Client entry: sidebar navigation & settings screen
-├── vendor-entry.ts          # SDK surface list for the vendor build
-├── server/
-│   ├── pi-sdk.cjs           # Vendored pi SDK + pi-mcp (generated at install; gitignored)
-│   ├── pi-sdk.d.cts         # Self-contained structural types for the bundle
-│   ├── provider.ts          # ProviderRegistration with embedded capabilities
-│   ├── connection.ts        # ProviderConnection protocol implementation
-│   ├── catalog.ts           # Dynamic model discovery from configured API keys
-│   ├── model-runtime.ts     # Shared ModelRuntime builder (manual ∪ external Pi)
-│   ├── external-pi.ts       # External pi config detection (~/.pi/agent)
-│   ├── session.ts           # Embedded pi AgentSession wrapper (MCP, persistence)
-│   ├── event-mapper.ts      # Pi stream events → Paseo timeline items (+ replay)
-│   ├── mcp-bridge.ts        # Paseo mcpServers → pi custom tools
-│   ├── paths.ts             # Plugin data directory helpers
-│   └── test-provider.ts     # Settings "Test connection" RPC implementation
-├── shared/
-│   ├── settings.ts          # Zod settings schema
-│   └── rpc.ts               # test-provider RPC contract
-├── client/
-│   ├── sidebar-item.tsx     # SidebarRow component
-│   ├── settings-screen.tsx  # General section + provider list; hosts the editor view
-│   ├── general-settings.tsx # Enable toggle, thinking budget, instructions
-│   ├── provider-list.tsx    # Provider list + external Pi list; rows open pages
-│   ├── external-provider-viewer.tsx # Read-only detail page for external providers
-│   ├── provider-editor.tsx  # Full-page create/edit form (back control, save, delete)
-│   └── use-debounced-save.ts# Debounced settings saves
-└── scripts/
-    ├── build-vendor.mjs     # esbuild build of the vendored SDK bundle
-    ├── smoke-test-vendor.mjs# Daemon-context evaluation + session smoke test
-    └── test-compile.mjs     # Real Paseo compiler end-to-end test
-```
+- **Sessions**: one pi child per Paseo session. Spawned at `session.open` with the
+  session cwd and env, the requested model and thinking level as launch flags
+  ( `--provider/--model/--thinking` ), and configured via a per-session agent dir, 
+  torn down on close (stdin end → SIGTERM → SIGKILL). A launch model the child
+  cannot resolve never kills the session: pi 1.0.0 substitutes a synthetic
+  model id with a warning, and stricter pi versions exit at launch — the plugin
+  detects the failed handshake and respawns without the flags. An orphaned
+  child cannot survive: pi's RPC mode exits when its stdin closes, so a dead
+  plugin process takes its children with it.
+- **Per-session config**: `server/config-writer.ts` generates `auth.json` (credentials),  `models.json` (custom endpoints + models), and `mcp.json` (Paseo's injected MCP servers — pi reads them from the agent dir) into `agent-dirs/<sessionId>/` under the plugin data tree. Files are 0600.
+- **Catalog**: the merged config (manual entries ∪ `/v1/models` discovery ∪ external reuse) is written to a shared probe dir and enumerated by a short-lived pi child (`get_available_models`), memoized on the catalog cache key.
+- **Zero external writes by construction**: external detection probes a throwaway copy of `~/.pi/agent` — pi persists provider-catalog state (`models-store.json`) into its agent dir even offline, so the real dir is never pointed at. The one sanctioned write-back is OAuth token refresh: sessions work on a private copy and `syncAuthBackToExternal` propagates rotations on a clean close (external pi wins if it wrote the file meanwhile).
+- **Isolation from project leakage**: children run with `--no-approve`, so project-local `.pi` extensions/resources never load; agent-dir config (our generated files) is unaffected.
 
 ## License
 

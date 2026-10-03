@@ -3,8 +3,8 @@
  * End-to-end plugin compile test: runs the REAL Paseo plugin compiler from
  * packages/server against this plugin's entries, then evaluates the produced
  * server bundle through the REAL bundle evaluator path (globalThis.eval inside
- * a (require) factory), proving the vendored pi SDK survives the full
- * daemon-side pipeline — compiler boundary checks included.
+ * a (require) factory), proving the server code survives the full daemon-side
+ * pipeline — compiler boundary checks included.
  *
  * Run from the paseo repo root: node ../autumn-studio/scripts/test-compile.mjs <paseo-repo>
  */
@@ -12,10 +12,6 @@ import { pathToFileURL } from "node:url";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import process from "node:process";
-
-import { ensureVendorBundle } from "./lib/ensure-vendor.mjs";
-
-ensureVendorBundle();
 
 const pluginRoot = path.resolve(import.meta.dirname, "..");
 // Defaults to the sibling paseo checkout, like the other scripts.
@@ -58,7 +54,7 @@ if (typeof setup !== "function") {
 
 const contributions = setup({
 	registerProvider(provider) {
-		console.log(`PASS: provider registered: id=${provider.id} label=${provider.label} command=${provider.command ? "set" : "none (embedded)"}`);
+		console.log(`PASS: provider registered: id=${provider.id} label=${provider.label} command=${provider.command ? "set" : "none (spawn via runner)"}`);
 		if (!provider.status || !provider.connect) {
 			console.error("FAIL: provider missing status/connect");
 			process.exit(1);

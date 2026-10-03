@@ -5,22 +5,17 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "build:vendor": "node scripts/build-vendor.mjs",
     "integration-test": "node scripts/integration-test.mjs",
-    "smoke-test": "node scripts/smoke-test-vendor.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "^1.0.0",
-    "@earendil-works/pi-coding-agent": "^1.0.0",
-    "@earendil-works/pi-mcp": "^1.0.0"
+    "@earendil-works/pi-coding-agent": "^1.0.0"
   },
   "devDependencies": {
     "@getpaseo/plugin": "*",
-    "@types/node": "^20.9.0",
+    "@types/node": "^22.0.0",
     "@types/react": "~19.2.0",
     "@types/use-sync-external-store": "^1.7.0",
-    "esbuild": "^0.28.2",
     "react": "^19.1.0",
     "react-native": "^0.81.5",
     "typescript": "^5.0.0",

@@ -6,6 +6,6 @@
   },
   "build": [
     ["npm", "install", "--no-audit", "--no-fund"],
-    ["npm", "run", "build:vendor"]
+    ["node", "scripts/write-anchor.mjs"]
   ]
 }

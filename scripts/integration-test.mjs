@@ -4,11 +4,13 @@
  *
  * Compiles the plugin with the REAL Paseo plugin compiler, evaluates the
  * bundle in the daemon-style eval context, and drives the contributed
- * provider end-to-end against a mock OpenAI-compatible LLM server:
+ * provider end-to-end — sessions run as real pi RPC child processes —
+ * against a mock OpenAI-compatible LLM server:
  *
- *   status → catalog (with /v1/models discovery) → session.open →
- *   prompt 1: bash tool executed for real, streamed text answer, usage,
- *             persistence to a pi session file →
+ *   status → catalog (probe spawn + /v1/models discovery) → session.open
+ *   (pi child spawns with generated per-session config) →
+ *   prompt 1: bash tool executed for real (env overlay reaches the child),
+ *             streamed text answer, usage, persistence to a pi session file →
  *   prompt 2: read tool (detail mapping) with a reasoning delta →
  *   prompt 3: session.interrupt mid-stream → turn canceled →
  *   prompt 4: completes →
@@ -22,6 +24,7 @@
  * `npm run build:server` done.
  */
 import { createRequire, isBuiltin } from "node:module";
+import { execSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
 import { mkdtempSync, mkdirSync, existsSync, writeFileSync, statSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,13 +32,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 
-import { ensureVendorBundle } from "./lib/ensure-vendor.mjs";
-
-ensureVendorBundle();
-
 const root = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = dirname(root);
 const paseoRoot = resolve(process.argv[2] ?? join(pluginRoot, "..", "paseo"));
+
+// The plugin locates its own runner via AUTUMN_PLUGIN_ROOT under test.
+process.env.AUTUMN_PLUGIN_ROOT = pluginRoot;
 
 // Isolated data dirs for the whole test.
 process.env.PASEO_HOME = mkdtempSync(join(tmpdir(), "autumn-integration-"));
@@ -161,11 +163,13 @@ const server = http.createServer((req, res) => {
 			});
 
 			if (llmCalls === 1) {
-				// Turn 1: ask for the bash tool, then stop for its result.
+				// Turn 1: ask for the bash tool, then stop for its result. The
+				// command also echoes the session env marker — the tool spawns
+				// inside the pi child, so this proves the env overlay arrives.
 				sse(res, [
 					chunk(id, 0, { role: "assistant", content: "" }),
 					chunk(id, 0, { tool_calls: [{ ...call(1), function: { name: "bash", arguments: "" } }] }),
-					chunk(id, 0, { tool_calls: [{ index: 0, function: { arguments: '{"command":"echo integration-tool-ok"}' } }] }),
+					chunk(id, 0, { tool_calls: [{ index: 0, function: { arguments: '{"command":"echo integration-tool-ok $AUTUMN_TEST_ENV_MARKER"}' } }] }),
 					chunk(id, 0, {}, "tool_calls"),
 				]);
 				return;
@@ -368,6 +372,20 @@ console.log(`PASS: provider registered: id=${provider.id} (command: ${provider.c
 // Drive the provider
 // ---------------------------------------------------------------------------
 
+/** PIDs of running pi runner children (pgrep exits 1 when there are none). */
+function listPiChildren() {
+	try {
+		return execSync("pgrep -f pi-runner.mjs", { encoding: "utf8" })
+			.split("\n")
+			.filter(Boolean);
+	} catch {
+		return [];
+	}
+}
+// Baseline may include unrelated runner processes from the user's real daemon;
+// only deltas count as orphans.
+const piChildrenBaseline = listPiChildren();
+
 const status = await provider.status();
 if (!status.available) fail(`status() reported unavailable: ${status.diagnostic}`);
 console.log("PASS: status() reports available");
@@ -407,7 +425,9 @@ function openSession(sessionId, model, persistence) {
 		...(persistence ? { persistence } : {}),
 		config: {
 			cwd,
-			env: {},
+			// Reaches the pi child's spawn env: the bash tool run in prompt 1
+			// proves the session env overlay actually arrives in the child.
+			env: { AUTUMN_TEST_ENV_MARKER: "env-overlay-works" },
 			mcpServers: {},
 			model,
 			settings: {},
@@ -517,14 +537,18 @@ const failedSteer = await waitFor("failed steer prompt_result", (e) => e.type ==
 if (failedSteer.result.type !== "failed") fail(`steer without active turn returned ${failedSteer.result.type}`);
 console.log("PASS: steer without active turn fails fast");
 
-// 4. Prompt 1: bash tool executes for real, then streamed text with usage.
+// 4. Prompt 1: bash tool executes for real (with session env), then streamed
+// text with usage.
 prompt("s1", "msg-1", "Run echo integration-tool-ok, then tell me the output.");
 await waitFor("turn started", (e) => e.type === "session.turn" && e.state === "started");
 await waitFor("bash tool completed", (e) => e.type === "timeline.item" && e.item.type === "tool_call" && e.item.status === "completed" && e.item.name === "bash");
 const bashItem = events.find((e) => e.type === "timeline.item" && e.item.type === "tool_call" && e.item.status === "completed" && e.item.name === "bash");
 const bashOutput = bashItem.item.detail.type === "shell" ? bashItem.item.detail.output ?? "" : "";
 if (!bashOutput.includes("integration-tool-ok")) fail(`bash tool output missing marker: ${bashOutput.slice(0, 200)}`);
-console.log(`PASS: bash tool executed; output: ${bashOutput.trim().slice(0, 60)}`);
+if (!bashOutput.includes("env-overlay-works")) {
+	fail(`session env did not reach the pi child's bash spawn: ${bashOutput.slice(0, 200)}`);
+}
+console.log(`PASS: bash tool executed in the child with session env; output: ${bashOutput.trim().slice(0, 80)}`);
 
 await waitFor("turn 1 completed", (e) => e.type === "session.turn" && e.state === "completed");
 if (!events.some((e) => e.type === "timeline.item" && e.item.type === "assistant_message" && e.item.text.includes("integration-done"))) {
@@ -558,6 +582,12 @@ const turn3Id = pr3.result.turnId;
 await waitFor("turn 3 started", (e) => e.type === "session.turn" && e.turnId === turn3Id && e.state === "started");
 // Wait until content is actually streaming before interrupting.
 await waitFor("turn 3 streaming", (e) => e.type === "timeline.item" && e.item?.type === "assistant_message" && events.filter((x) => x.type === "timeline.item" && x.item?.type === "assistant_message" && x.sessionId === "s1").length >= 3);
+// A second non-steer prompt during the active turn fails fast instead of
+// corrupting turn bookkeeping or hanging the dispatch.
+prompt("s1", "msg-3b", "Second prompt while streaming.");
+const pr3b = await waitFor("concurrent prompt_result", (e) => e.type === "session.prompt_result" && e.clientMessageId === "msg-3b");
+if (pr3b.result.type !== "failed") fail(`concurrent prompt returned ${pr3b.result.type}, expected failed`);
+console.log("PASS: concurrent prompt during an active turn fails fast");
 connection.send({ type: "session.interrupt", requestId: "req-interrupt", sessionId: "s1" });
 const canceled = await waitFor("turn 3 canceled", (e) => e.type === "session.turn" && e.turnId === turn3Id && (e.state === "canceled" || e.state === "completed" || e.state === "failed"));
 if (canceled.state !== "canceled") fail(`interrupted turn ended as ${canceled.state}, expected canceled`);
@@ -671,8 +701,91 @@ connection.send({ type: "session.close", requestId: "req-close-5", sessionId: "s
 await waitFor("s5 closed", (e) => e.type === "session.closed" && e.sessionId === "s5");
 console.log("PASS: external models.json model streams through the mock");
 
+// 15. Stale-model resilience: a requested model the child cannot resolve
+// must not kill the session open. pi 1.0.0 warns and substitutes a synthetic
+// custom model id; stricter pi versions exit(1) at launch, which the plugin's
+// handshake fallback covers by respawning without the launch model flags.
+// Either way the session opens and prompts.
+openSession("s6", "ext-provider/missing-model");
+await waitFor("s6 opened", (e) => e.type === "session.opened" && e.sessionId === "s6");
+const s6Config = await waitFor("s6 config", (e) => e.type === "session.config" && e.sessionId === "s6");
+await waitFor("s6 ready", (e) => e.type === "session.ready" && e.sessionId === "s6");
+prompt("s6", "msg-9", "Summarize.");
+await waitFor("s6 turn completed", (e) => e.type === "session.turn" && e.state === "completed" && e.sessionId === "s6");
+connection.send({ type: "session.close", requestId: "req-close-6", sessionId: "s6" });
+await waitFor("s6 closed", (e) => e.type === "session.closed" && e.sessionId === "s6");
+console.log(`PASS: unresolvable requested model still yields a working session (model=${s6Config.config.model ?? "default"})`);
+
+// 16. Anchorless plugin-root resolution: an install whose manifest build
+// step never ran (e.g. a reload, which recompiles without running the build)
+// has no plugin-root.json anchor and no AUTUMN_PLUGIN_ROOT. The plugin must
+// discover its directory from the daemon's plugin registry in
+// $PASEO_HOME/config.json and self-heal the anchor for subsequent
+// resolutions. A settings change forces a fresh catalog build (memo key
+// changes), which spawns a probe child and therefore resolves the root.
+{
+	const anchorlessHome = mkdtempSync(join(tmpdir(), "autumn-anchorless-"));
+	const anchorlessDataDir = join(anchorlessHome, "plugin-data", "autumn-studio");
+	mkdirSync(anchorlessDataDir, { recursive: true });
+	writeFileSync(
+		join(anchorlessHome, "config.json"),
+		JSON.stringify({
+			plugins: { "autumn-studio": { source: "directory", path: pluginRoot, enabled: true } },
+		}),
+	);
+	const prevHome = process.env.PASEO_HOME;
+	const prevRoot = process.env.AUTUMN_PLUGIN_ROOT;
+	process.env.PASEO_HOME = anchorlessHome;
+	delete process.env.AUTUMN_PLUGIN_ROOT;
+	try {
+		const originalProviders = settingsValues.providers;
+		settingsValues.providers = [
+			...originalProviders,
+			{
+				id: "p-anchor",
+				name: "Anchorless Endpoint",
+				type: "custom",
+				apiKey: "",
+				baseUrl: seededBaseUrl,
+				models: [],
+				reasoning: false,
+				enabled: true,
+			},
+		];
+		connection.send({ type: "catalog", requestId: "req-catalog-anchorless" });
+		const anchorlessEvent = await waitFor(
+			"anchorless catalog",
+			(e) => e.type === "catalog" && e.requestId === "req-catalog-anchorless",
+			60000,
+		);
+		settingsValues.providers = originalProviders;
+		const anchorlessIds = anchorlessEvent.catalog.models.map((m) => m.id);
+		// p-anchor's model id comes from the degraded-discovery cache (the
+		// seeded endpoint is unreachable); what matters is that the probe ran,
+		// which proves the plugin root resolved without anchor or env.
+		if (!anchorlessIds.some((id) => id.startsWith("p-anchor/"))) {
+			fail(`anchorless catalog did not build; got: ${anchorlessIds.join(", ")}`);
+		}
+		if (!existsSync(join(anchorlessDataDir, "plugin-root.json"))) {
+			fail("anchorless resolution did not self-heal the anchor file");
+		}
+		const anchorDoc = JSON.parse(readFileSync(join(anchorlessDataDir, "plugin-root.json"), "utf8"));
+		if (anchorDoc.root !== pluginRoot) fail(`self-healed anchor points at ${anchorDoc.root}`);
+		console.log("PASS: anchorless resolution via daemon registry, anchor self-healed");
+	} finally {
+		process.env.PASEO_HOME = prevHome;
+		if (prevRoot !== undefined) process.env.AUTUMN_PLUGIN_ROOT = prevRoot;
+	}
+}
+
 await connection.close();
 server.close();
+await new Promise((resolve) => setTimeout(resolve, 1500));
+const orphanedPi = listPiChildren().filter((pid) => !piChildrenBaseline.includes(pid));
+if (orphanedPi.length > 0) {
+	fail(`orphaned pi children remain after close: ${orphanedPi.join(",")}`);
+}
+console.log("PASS: no orphaned pi children after every close");
 if (readdirSync(extAgentDir).sort().join(",") !== externalSnapshot()) {
 	fail(`external dir changed during run: ${readdirSync(extAgentDir).sort().join(",")}`);
 }

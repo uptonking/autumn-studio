@@ -1,14 +1,15 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
+import { basename } from "node:path";
+import { copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { runnerScriptPath } from "./paths.js";
 
 /**
  * The user's EXTERNAL pi installation. Computed directly — never via pi's
- * getAgentDir(), because the plugin subprocess sets PI_CODING_AGENT_DIR to
- * the plugin's private agent dir for session isolation. An env override
- * exists for nonstandard installs and tests.
+ * getAgentDir(), which would read PI_CODING_AGENT_DIR out of the inherited
+ * daemon environment. That env var must only ever reach spawned pi children,
+ * never mean "the external dir". An env override exists for tests.
  */
 export function externalAgentDir(): string {
 	const override = process.env.AUTUMN_EXTERNAL_PI_DIR;
@@ -67,7 +68,7 @@ export function hasExternalConfig(): boolean {
 
 /**
  * Enumerate the external pi installation's usable LLM providers.
- * Spawns a fast query to Pi in RPC mode with PI_CODING_AGENT_DIR set to the
+ * Spawns a fast query to Pi in RPC mode against a THROWAWAY COPY of the
  * external directory, grouping available models by provider.
  * Results are cached until the mtime of external config files changes.
  */
@@ -96,41 +97,31 @@ export async function detectExternalProviders(): Promise<ExternalDetection> {
 				} catch {}
 			}
 
-			const available = await queryAvailableModelsFromDir(externalAgentDir());
-			const grouped = new Map<string, ExternalModelInfo[]>();
-
-			for (const model of available) {
-				const list = grouped.get(model.provider) ?? [];
-				list.push({
-					id: model.id,
-					name: model.name || model.id,
-					reasoning: model.reasoning,
-					contextWindow: model.contextWindow,
-				});
-				grouped.set(model.provider, list);
-			}
-
-			for (const [providerId, models] of grouped) {
-				const customProvider = modelsJson.providers?.[providerId];
-				const authEntry = authJson[providerId];
-
-				let authSource = "stored";
-				if (authEntry?.type === "oauth") {
-					authSource = "oauth";
-				} else if (customProvider?.apiKey) {
-					authSource = "models_json_key";
-				} else if (authEntry?.key) {
-					authSource = "stored";
+			// The probe child gets a copy of the external config, never the real
+			// dir: pi persists provider catalog state (models-store.json) into its
+			// agent dir even offline — ModelRuntime.create runs a local refresh
+			// phase — so pointing the child at the real dir could write there.
+			const probeDir = mkdtempSync(join(tmpdir(), "autumn-detect-"));
+			try {
+				for (const file of [externalAuthPath(), externalModelsPath()]) {
+					if (existsSync(file)) copyFileSync(file, join(probeDir, basename(file)));
 				}
+				const available = await queryAvailableModelsFromDir(probeDir);
+				const grouped = new Map<string, ExternalModelInfo[]>();
 
-				detection.providers.push({
-					id: providerId,
-					source: "external-pi",
-					name: customProvider?.name || providerId,
-					authSource,
-					baseUrl: customProvider?.baseUrl,
-					models,
-				});
+				for (const model of available) {
+					const list = grouped.get(model.provider) ?? [];
+					list.push({
+						id: model.id,
+						name: model.name || model.id,
+						reasoning: model.reasoning,
+						contextWindow: model.contextWindow,
+					});
+					grouped.set(model.provider, list);
+				}
+				groupIntoDetection(detection, grouped, authJson, modelsJson);
+			} finally {
+				rmSync(probeDir, { recursive: true, force: true });
 			}
 		} catch {
 			// Unreadable external config degrades to empty
@@ -139,6 +130,36 @@ export async function detectExternalProviders(): Promise<ExternalDetection> {
 
 	cache = { stamp, detection };
 	return detection;
+}
+
+function groupIntoDetection(
+	detection: ExternalDetection,
+	grouped: Map<string, ExternalModelInfo[]>,
+	authJson: Record<string, any>,
+	modelsJson: Record<string, any>,
+): void {
+	for (const [providerId, models] of grouped) {
+		const customProvider = modelsJson.providers?.[providerId];
+		const authEntry = authJson[providerId];
+
+		let authSource = "stored";
+		if (authEntry?.type === "oauth") {
+			authSource = "oauth";
+		} else if (customProvider?.apiKey) {
+			authSource = "models_json_key";
+		} else if (authEntry?.key) {
+			authSource = "stored";
+		}
+
+		detection.providers.push({
+			id: providerId,
+			source: "external-pi",
+			name: customProvider?.name || providerId,
+			authSource,
+			baseUrl: customProvider?.baseUrl,
+			models,
+		});
+	}
 }
 
 /** External provider id → display name, for catalog row descriptions. */
@@ -152,17 +173,24 @@ export async function externalProviderLabels(): Promise<Record<string, string>> 
 }
 
 /**
- * Spawns a short-lived Pi process pointing to a specific agentDir
- * to query available models via `get_available_models`.
+ * Spawns a short-lived Pi process pointing at a specific agentDir to query
+ * available models via `get_available_models`. Callers pass a directory they
+ * are willing to let pi write to (a throwaway copy for external detection,
+ * or the plugin-owned probe dir for the catalog).
+ *
+ * `--offline` keeps the probe deterministic: no network, no OAuth refresh,
+ * no background model-catalog refresh.
  */
-async function queryAvailableModelsFromDir(
+export async function queryAvailableModelsFromDir(
 	targetAgentDir: string,
+	timeoutMs = 15000,
 ): Promise<Array<{ id: string; provider: string; name?: string; reasoning?: boolean; contextWindow?: number }>> {
 	return new Promise((resolve) => {
 		let resolved = false;
+		// pi-runner.mjs already invokes main with --mode rpc; extra argv passes through.
 		const child = spawn(
 			process.execPath,
-			[runnerScriptPath(), "--mode", "rpc", "--no-session"],
+			[runnerScriptPath(), "--offline", "--no-session"],
 			{
 				stdio: ["pipe", "pipe", "pipe"],
 				env: { ...process.env, PI_CODING_AGENT_DIR: targetAgentDir },
@@ -180,7 +208,7 @@ async function queryAvailableModelsFromDir(
 			resolve(result);
 		};
 
-		const timer = setTimeout(() => cleanup([]), 6000);
+		const timer = setTimeout(() => cleanup([]), timeoutMs);
 
 		let buffer = "";
 		child.stdout.on("data", (chunk: Buffer | string) => {
