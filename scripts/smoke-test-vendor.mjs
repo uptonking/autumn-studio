@@ -19,6 +19,10 @@ import { fileURLToPath } from "node:url";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 
+import { ensureVendorBundle } from "./lib/ensure-vendor.mjs";
+
+ensureVendorBundle();
+
 const root = dirname(fileURLToPath(import.meta.url));
 const bundlePath = join(root, "..", "server", "pi-sdk.cjs");
 const bundle = readFileSync(bundlePath, "utf8");

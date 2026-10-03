@@ -29,6 +29,11 @@ export function GeneralSettings({ settings }: { settings: ReadySettings }) {
 		void settings.save({ ...settings.values, enabled }, settings.revision);
 	};
 
+	const toggleReuseExternal = (reuseExternalPi: boolean) => {
+		// Immediate: toggling refreshes the provider catalog.
+		void settings.save({ ...settings.values, reuseExternalPi }, settings.revision);
+	};
+
 	const changeThinkingLevel = (defaultThinkingLevel: "off" | "low" | "medium" | "high") => {
 		void settings.save({ ...settings.values, defaultThinkingLevel }, settings.revision);
 	};
@@ -46,6 +51,13 @@ export function GeneralSettings({ settings }: { settings: ReadySettings }) {
 					value={settings.values.enabled}
 					disabled={settings.saving}
 					onValueChange={toggleEnabled}
+				/>
+				<SettingsSwitch
+					label="Reuse external Pi providers"
+					hint="Use LLM providers configured for your external Pi installation (~/.pi/agent). Read-only except OAuth token refresh."
+					value={settings.values.reuseExternalPi === true}
+					disabled={settings.saving}
+					onValueChange={toggleReuseExternal}
 				/>
 				<SettingsSelect
 					label="Default reasoning effort"

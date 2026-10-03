@@ -27,6 +27,8 @@ AI coding agent bundled as a standalone Paseo plugin. Powered by an embedded [Pi
   (or "Add provider") opens a dedicated editor page with a back control — type, name, 
   key, base URL, reasoning toggle, enable switch, test connection, save, and delete
   live there.
+- **External Pi reuse**: LLM providers already configured for an external pi
+  installation (`~/.pi/agent` `auth.json` + `models.json`) are auto-detected — their models appear in the chatbox picker with zero setup.
 - **Paseo tool wiring**: Paseo's injected MCP servers are bridged into the embedded
   agent as `mcp__<server>__<tool>` custom tools.
 - **Dedicated Sidebar Menu**: The **Autumn Studio** sidebar item (below Schedules)
@@ -86,10 +88,18 @@ endpoint, and a mid-session effort switch takes effect on the next turn. It also
 closes a session mid-turn and verifies the close unwinds cleanly, emits nothing for
 the dead session, and leaves the connection usable.
 
-The vendored bundle ( `server/pi-sdk.cjs` ) is checked in. Rebuild it when bumping
-`@earendil-works/pi-*` versions. Keep `server/pi-sdk.d.cts` free of external imports —
-the Paseo plugin compiler walks type-declaration graphs and pi's published types do not
-resolve outside their own tree.
+The vendored bundle ( `server/pi-sdk.cjs` ) is a **generated artifact, not committed**:
+it is built from the npm-installed `@earendil-works/pi-*` packages — never from pi's
+source tree — by the manifest `build` step when the plugin is installed or updated
+(`paseo-plugin.json` → `npm install` + `npm run build:vendor`). Rebuild locally with
+`npm run build:vendor` after changing `vendor-entry.ts` or bumping pi versions; the
+test scripts rebuild it automatically when missing. The pre-bundle exists because
+importing the pi package directly is impossible inside a plugin: its package entry
+pulls in the interactive TUI, its dist code reads `import.meta.url` / `__filename`
+at module scope (which crashes the daemon's eval-based bundle loader), and its
+published type graph does not resolve outside its own tree (the Paseo compiler walks
+type declarations). Keep `server/pi-sdk.d.cts` free of external imports for the same
+reason.
 
 ## Directory Structure
 
@@ -103,12 +113,13 @@ autumn-studio/
 ├── index.client.tsx         # Client entry: sidebar navigation & settings screen
 ├── vendor-entry.ts          # SDK surface list for the vendor build
 ├── server/
-│   ├── pi-sdk.cjs           # Vendored pi SDK + pi-mcp (prebuilt, checked in)
+│   ├── pi-sdk.cjs           # Vendored pi SDK + pi-mcp (generated at install; gitignored)
 │   ├── pi-sdk.d.cts         # Self-contained structural types for the bundle
 │   ├── provider.ts          # ProviderRegistration with embedded capabilities
 │   ├── connection.ts        # ProviderConnection protocol implementation
 │   ├── catalog.ts           # Dynamic model discovery from configured API keys
-│   ├── model-runtime.ts     # Shared ModelRuntime builder from settings entries
+│   ├── model-runtime.ts     # Shared ModelRuntime builder (manual ∪ external Pi)
+│   ├── external-pi.ts       # External pi config detection (~/.pi/agent)
 │   ├── session.ts           # Embedded pi AgentSession wrapper (MCP, persistence)
 │   ├── event-mapper.ts      # Pi stream events → Paseo timeline items (+ replay)
 │   ├── mcp-bridge.ts        # Paseo mcpServers → pi custom tools
@@ -121,7 +132,8 @@ autumn-studio/
 │   ├── sidebar-item.tsx     # SidebarRow component
 │   ├── settings-screen.tsx  # General section + provider list; hosts the editor view
 │   ├── general-settings.tsx # Enable toggle, thinking budget, instructions
-│   ├── provider-list.tsx    # Read-only provider list; rows open the editor
+│   ├── provider-list.tsx    # Provider list + external Pi list; rows open pages
+│   ├── external-provider-viewer.tsx # Read-only detail page for external providers
 │   ├── provider-editor.tsx  # Full-page create/edit form (back control, save, delete)
 │   └── use-debounced-save.ts# Debounced settings saves
 └── scripts/

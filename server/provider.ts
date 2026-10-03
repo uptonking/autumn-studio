@@ -6,6 +6,7 @@ import {
 import type { PluginSettings } from "@getpaseo/plugin/server";
 import type { settings } from "../shared/settings.js";
 import { createAutumnConnection } from "./connection.js";
+import { configStamp, detectExternalProviders } from "./external-pi.js";
 
 export type SettingsHandle = PluginSettings<typeof settings.schema>;
 
@@ -34,9 +35,13 @@ export function createAutumnProvider(
       // Bump when catalog-building behavior changes: a new key forces the
       // daemon to re-fetch the catalog after a plugin upgrade, instead of
       // serving a snapshot built by older code.
-      const CATALOG_KEY_VERSION = 2;
+      const CATALOG_KEY_VERSION = 3;
+      // The external config stamp makes edits to external pi's auth.json /
+      // models.json refresh the catalog without a settings save.
+      const external =
+        state.values.reuseExternalPi === true ? `ext:${configStamp()}` : "ext:off";
       const hash = createHash("sha256")
-        .update(`${CATALOG_KEY_VERSION}:${JSON.stringify(state.values)}`)
+        .update(`${CATALOG_KEY_VERSION}:${external}:${JSON.stringify(state.values)}`)
         .digest("hex")
         .slice(0, 16);
       return `providers:${hash}`;
@@ -60,14 +65,27 @@ export function createAutumnProvider(
           (p.apiKey.trim().length > 0 ||
             (p.type === "custom" && p.baseUrl.trim().length > 0)),
       );
-      if (!hasConfigured) {
+      if (hasConfigured) {
+        return { available: true };
+      }
+      // No manual entries: external pi providers count as configured too,
+      // otherwise the picker would hide a provider whose models exist.
+      if (state.values.reuseExternalPi === true) {
+        const external = await detectExternalProviders();
+        if (external.providers.length > 0) {
+          return { available: true };
+        }
         return {
           available: false,
           diagnostic:
-            "No LLM providers configured. Add an API key or custom endpoint in the Autumn Studio settings.",
+            "No LLM providers configured. Add an API key in the Autumn Studio settings, or configure a provider in external Pi (~/.pi/agent).",
         };
       }
-      return { available: true };
+      return {
+        available: false,
+        diagnostic:
+          "No LLM providers configured. Add an API key or custom endpoint in the Autumn Studio settings.",
+      };
     },
 
     async connect(request) {

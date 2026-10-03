@@ -18,3 +18,4 @@ export { readStoredCredential } from "./node_modules/@earendil-works/pi-coding-a
 export { McpClient } from "./node_modules/@earendil-works/pi-mcp/dist/client.js";
 export { StdioTransport } from "./node_modules/@earendil-works/pi-mcp/dist/transports/stdio.js";
 export { StreamableHttpTransport } from "./node_modules/@earendil-works/pi-mcp/dist/transports/streamable-http.js";
+export { InMemoryCodingAgentModelsStore } from "./node_modules/@earendil-works/pi-coding-agent/dist/core/models-store.js";

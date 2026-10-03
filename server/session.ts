@@ -22,8 +22,10 @@ import {
 	buildModelRuntime,
 	activeProvidersFrom,
 	providerDisplayNames,
+	resolveAutoProviderIds,
 	toProviderModels,
 } from "./model-runtime.js";
+import { externalProviderLabels } from "./external-pi.js";
 
 export type SettingsHandle = import("@getpaseo/plugin/server").PluginSettings<typeof settings.schema>;
 
@@ -100,7 +102,11 @@ export class EmbeddedSession {
 		// Custom endpoints register their discovered models; the requested
 		// model is always included so getModel resolves the catalog-advertised
 		// `<entry.id>/<modelId>` id.
-		const modelRuntime = await buildModelRuntime(providers, { requestModel: config.model });
+		const reuseExternalPi = state.status === "ready" ? state.values.reuseExternalPi === true : false;
+		const modelRuntime = await buildModelRuntime(providers, {
+			requestModel: config.model,
+			reuseExternalPi,
+		});
 
 		// 2. Resolve the requested model and thinking level.
 		let model: unknown = undefined;
@@ -181,7 +187,15 @@ export class EmbeddedSession {
 		} catch {
 			available = [];
 		}
-		const models = toProviderModels(available, defaultThinkingId, providerDisplayNames(providers));
+		// Manual names win over external ones (manual entries override on merge).
+		const externalLabels = reuseExternalPi ? await externalProviderLabels() : {};
+		const labels = { ...externalLabels, ...providerDisplayNames(providers) };
+		const models = toProviderModels(
+			available,
+			defaultThinkingId,
+			labels,
+			resolveAutoProviderIds(externalLabels, providers),
+		);
 
 		const activeTurnRef: { current: string | null } = { current: null };
 		const unsubscribe = mapPiEvents(sessionId, piSession, emit, () => activeTurnRef.current);

@@ -85,3 +85,7 @@ data/
 .runtime/
 .runtime-ci-*/
 .runtime-plan-*/
+
+# Generated at install time by the manifest `build` step (see paseo-plugin.json);
+# rebuild locally with `npm run build:vendor`.
+server/pi-sdk.cjs

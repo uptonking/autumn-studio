@@ -23,11 +23,15 @@
  */
 import { createRequire, isBuiltin } from "node:module";
 import { pathToFileURL } from "node:url";
-import { mkdtempSync, mkdirSync, existsSync, writeFileSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, existsSync, writeFileSync, statSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
+
+import { ensureVendorBundle } from "./lib/ensure-vendor.mjs";
+
+ensureVendorBundle();
 
 const root = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = dirname(root);
@@ -37,6 +41,41 @@ const paseoRoot = resolve(process.argv[2] ?? join(pluginRoot, "..", "paseo"));
 process.env.PASEO_HOME = mkdtempSync(join(tmpdir(), "autumn-integration-"));
 const seededBaseUrl = "http://127.0.0.1:2/v1";
 mkdirSync(join(process.env.PASEO_HOME, "plugin-data", "autumn-studio"), { recursive: true });
+
+// Fake external pi installation: auth.json key for a builtin provider plus a
+// custom models.json provider pointing at the mock LLM.
+const extAgentDir = mkdtempSync(join(tmpdir(), "autumn-ext-pi-"));
+writeFileSync(
+	join(extAgentDir, "auth.json"),
+	JSON.stringify({ openai: { type: "api_key", key: "sk-external-test" } }),
+);
+writeFileSync(
+	join(extAgentDir, "models.json"),
+	JSON.stringify({
+		providers: {
+			"ext-provider": {
+				name: "Ext Provider",
+				baseUrl: "SET_AFTER_MOCK_PORT",
+				apiKey: "ext-key",
+				api: "openai-completions",
+				models: [
+					{
+						id: "ext-model-a",
+						name: "Ext Model A",
+						contextWindow: 8192,
+						maxTokens: 2048,
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					},
+				],
+			},
+		},
+	}),
+);
+process.env.AUTUMN_EXTERNAL_PI_DIR = extAgentDir;
+const externalSnapshot = () => readdirSync(extAgentDir).sort().join(",");
+const externalAuthBefore = readFileSync(join(extAgentDir, "auth.json"), "utf8");
 const require2 = createRequire(import.meta.url);
 const cwd = mkdtempSync(join(tmpdir(), "autumn-cwd-"));
 const readFile = join(cwd, "mock-read.txt");
@@ -180,6 +219,31 @@ writeFileSync(
 	}),
 );
 
+writeFileSync(
+	join(extAgentDir, "models.json"),
+	JSON.stringify({
+		providers: {
+			"ext-provider": {
+				name: "Ext Provider",
+				baseUrl: `http://127.0.0.1:${mockPort}/v1`,
+				apiKey: "ext-key",
+				api: "openai-completions",
+				models: [
+					{
+						id: "ext-model-a",
+						name: "Ext Model A",
+						contextWindow: 8192,
+						maxTokens: 2048,
+						reasoning: false,
+						input: ["text"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					},
+				],
+			},
+		},
+	}),
+);
+
 // ---------------------------------------------------------------------------
 // Compile + evaluate the real plugin bundle
 // ---------------------------------------------------------------------------
@@ -206,6 +270,7 @@ function runtimeRequire(name) {
 // Fake settings store backed by an in-memory document, like the host serves.
 const settingsValues = {
 	enabled: true,
+	reuseExternalPi: true,
 	defaultThinkingLevel: "medium",
 	customInstructions: "",
 	providers: [
@@ -258,6 +323,7 @@ let provider;
 const evaluate = globalThis.eval;
 const exportsObject = evaluate(serverBundle)(runtimeRequire);
 const setup = typeof exportsObject === "object" && exportsObject !== null ? exportsObject.default : exportsObject;
+const rpcHandlers = new Map();
 setup({
 	registerProvider(p) {
 		provider = p;
@@ -265,7 +331,9 @@ setup({
 	registerSettings() {
 		return settingsHandle;
 	},
-	handle() {},
+	handle(contract, handler) {
+		rpcHandlers.set(contract.name, handler);
+	},
 });
 
 function fail(message) {
@@ -276,6 +344,25 @@ function fail(message) {
 
 if (!provider) fail("provider was not registered");
 console.log(`PASS: provider registered: id=${provider.id} (command: ${provider.command ? "set" : "none, embedded"})`);
+
+// status()/cache-key must honor external providers even with no manual entries.
+{
+	const originalProviders = settingsValues.providers;
+	settingsValues.providers = [];
+	const externalOnlyStatus = await provider.status();
+	if (!externalOnlyStatus.available) {
+		fail(`status() unavailable with only external providers: ${externalOnlyStatus.diagnostic}`);
+	}
+	const keyA = await provider.getCatalogCacheKey({});
+	// Touch the external models.json (valid content, new mtime) — the cache
+	// key must change so the catalog refreshes after external config edits.
+	const modelsJsonNow = readFileSync(join(extAgentDir, "models.json"), "utf8");
+	writeFileSync(join(extAgentDir, "models.json"), `${modelsJsonNow}\n`);
+	const keyB = await provider.getCatalogCacheKey({});
+	settingsValues.providers = originalProviders;
+	if (keyA === keyB) fail("catalog cache key ignored an external config change");
+	console.log("PASS: status() and cache key honor external Pi config");
+}
 
 // ---------------------------------------------------------------------------
 // Drive the provider
@@ -354,6 +441,49 @@ for (const required of ["p1/mock-small", "p1/mock-large", "p1/gpt-6-luna", "p2/l
 	}
 }
 console.log("PASS: catalog = discovered ∪ manual models, including an unreachable endpoint's entry");
+if (!catalogModelIds.some((id) => id === "ext-provider/ext-model-a")) {
+	fail(`external models.json provider missing from catalog; got: ${catalogModelIds.join(", ")}`);
+}
+if (!catalogModelIds.some((id) => id.startsWith("openai/"))) {
+	fail(`external auth.json credential (openai) did not surface builtin models; got: ${catalogModelIds.join(", ")}`);
+}
+const autoRow = catalogEvent.catalog.models.find((m) => m.id === "ext-provider/ext-model-a");
+if (!autoRow?.description?.startsWith("\u{1F441}")) {
+	fail(`auto-detected catalog row missing eye marker: ${JSON.stringify(autoRow?.description)}`);
+}
+const manualRow = catalogEvent.catalog.models.find((m) => m.id === "p1/mock-small");
+if (manualRow?.description?.startsWith("\u{1F441}")) {
+	fail(`manual catalog row wrongly marked auto: ${JSON.stringify(manualRow.description)}`);
+}
+console.log("PASS: picker marks auto-detected models (eye) and leaves manual ones clean");
+console.log("PASS: external Pi providers (models.json + auth.json) appear in the catalog");
+
+// External-only catalog: when zero manual providers are configured, external models still populate the catalog.
+{
+	const original = settingsValues.providers;
+	settingsValues.providers = [];
+	connection.send({ type: "catalog", requestId: "req-catalog-ext-only" });
+	const extOnlyEvent = await waitFor("catalog ext-only", (e) => e.type === "catalog" && e.requestId === "req-catalog-ext-only");
+	settingsValues.providers = original;
+	const extOnlyIds = extOnlyEvent.catalog.models.map((m) => m.id);
+	if (!extOnlyIds.some((id) => id === "ext-provider/ext-model-a")) {
+		fail(`external-only catalog missing external models; got: ${extOnlyIds.join(", ")}`);
+	}
+	console.log("PASS: external-only catalog serves external models with zero manual providers");
+}
+const externalHandler = rpcHandlers.get("autumn-studio.external-providers");
+if (!externalHandler) fail("autumn-studio.external-providers RPC not registered");
+const externalResult = await externalHandler({});
+if (externalResult.agentDir !== extAgentDir) fail(`detection agentDir is ${externalResult.agentDir}`);
+const extProvider = externalResult.providers.find((p) => p.id === "ext-provider");
+if (!extProvider || extProvider.source !== "external-pi" || extProvider.authSource !== "models_json_key" || extProvider.models.length !== 1) {
+	fail(`detection missing ext-provider: ${JSON.stringify(extProvider)}`);
+}
+const openaiEntry = externalResult.providers.find((p) => p.id === "openai");
+if (!openaiEntry || openaiEntry.authSource !== "stored") {
+	fail(`detection missing openai (stored): ${JSON.stringify(openaiEntry)}`);
+}
+console.log("PASS: detection RPC lists external providers with auth sources");
 const smallModel = catalogEvent.catalog.models.find((m) => m.id === "p1/mock-small");
 if (!smallModel?.thinkingOptions || smallModel.thinkingOptions.length !== 4) {
 	fail(`mock-small thinking options missing: ${JSON.stringify(smallModel?.thinkingOptions)}`);
@@ -528,8 +658,31 @@ connection.send({ type: "session.close", requestId: "req-close-4", sessionId: "s
 await waitFor("s4 closed", (e) => e.type === "session.closed" && e.sessionId === "s4");
 console.log("PASS: connection usable after mid-turn close");
 
+// 14. A model from the external models.json provider streams for real
+// (proves the external provider's key is used end-to-end).
+openSession("s5", "ext-provider/ext-model-a");
+await waitFor("s5 ready", (e) => e.type === "session.ready" && e.sessionId === "s5");
+prompt("s5", "msg-8", "External check.");
+await waitFor("s5 turn completed", (e) => e.type === "session.turn" && e.state === "completed" && e.sessionId === "s5");
+if (!events.some((e) => e.type === "timeline.item" && e.item?.type === "assistant_message" && e.sessionId === "s5" && e.item.text.includes("integration-done"))) {
+	fail("external-model session produced no assistant text");
+}
+connection.send({ type: "session.close", requestId: "req-close-5", sessionId: "s5" });
+await waitFor("s5 closed", (e) => e.type === "session.closed" && e.sessionId === "s5");
+console.log("PASS: external models.json model streams through the mock");
+
 await connection.close();
 server.close();
+if (readdirSync(extAgentDir).sort().join(",") !== externalSnapshot()) {
+	fail(`external dir changed during run: ${readdirSync(extAgentDir).sort().join(",")}`);
+}
+if (readFileSync(join(extAgentDir, "auth.json"), "utf8") !== externalAuthBefore) {
+	fail("external auth.json was modified during the run");
+}
+if (existsSync(join(extAgentDir, "models-store.json"))) {
+	fail("pi wrote models-store.json into the external dir");
+}
+console.log("PASS: external pi dir untouched (no writes, no models-store.json)");
 console.log(`INFO: mock LLM served ${llmCalls} completions`);
 console.log("INTEGRATION TEST OK");
 process.exit(0);

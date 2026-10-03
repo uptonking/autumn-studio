@@ -13,6 +13,10 @@ import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import process from "node:process";
 
+import { ensureVendorBundle } from "./lib/ensure-vendor.mjs";
+
+ensureVendorBundle();
+
 const pluginRoot = path.resolve(import.meta.dirname, "..");
 // Defaults to the sibling paseo checkout, like the other scripts.
 const paseoRoot = path.resolve(process.argv[2] ?? path.join(pluginRoot, "..", "paseo"));

@@ -100,13 +100,22 @@ export declare class DefaultResourceLoader {
 export declare class ModelRuntime {
 	static create(options: {
 		modelsPath?: string | null;
+		authPath?: string;
+		credentials?: unknown;
+		modelsStore?: unknown;
 		allowModelNetwork?: boolean;
 		refreshOnCreate?: boolean;
 	}): Promise<ModelRuntime>;
 	getModel(providerId: string, modelId: string): { reasoning?: boolean } | undefined;
 	getAvailable(): Promise<readonly VendorModelInfo[]>;
+	/** Recompute config load + availability coherently (offline when allowNetwork is false). */
+	refresh(options?: { allowNetwork?: boolean }): Promise<void>;
 	registerProvider(providerId: string, config: unknown): void;
 	setRuntimeApiKey(providerId: string, apiKey: string): Promise<void>;
+	/** Composed provider info (name/baseUrl) for custom and builtin providers. */
+	getProvider(providerId: string): { name?: string; baseUrl?: string } | undefined;
+	/** Credential status: { configured, source: "runtime"|"stored"|"environment"|"models_json_key"|... } */
+	getProviderAuthStatus(providerId: string): { configured: boolean; source?: string };
 }
 
 export declare class SessionManager {
@@ -132,6 +141,13 @@ export declare class StdioTransport {
 
 export declare class StreamableHttpTransport {
 	constructor(options: { url: string; headers?: Record<string, string> });
+}
+
+/** In-memory ModelsStore: keeps pi's remote-catalog cache out of any on-disk agent dir. */
+export declare class InMemoryCodingAgentModelsStore {
+	read(providerId: string): Promise<unknown>;
+	write(providerId: string, entry: unknown): Promise<void>;
+	delete(providerId: string): Promise<void>;
 }
 
 export declare function createAgentSession(options: {

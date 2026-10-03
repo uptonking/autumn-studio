@@ -21,7 +21,7 @@
  * collected as non-fatal diagnostics by the resource loader.
  */
 import { build } from "esbuild";
-import { statSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -85,12 +85,6 @@ const result = await build({
 	metafile: true,
 });
 
-const { writeFileSync, mkdirSync } = await import("node:fs");
 mkdirSync(dirname(out), { recursive: true });
 writeFileSync(out, result.outputFiles[0].text);
-
-const kb = Math.round(statSyncFake());
-function statSyncFake() {
-	return Buffer.byteLength(result.outputFiles[0].text) / 1024;
-}
-console.log(`server/pi-sdk.cjs written (${kb} KB)`);
+console.log(`server/pi-sdk.cjs written (${Math.round(result.outputFiles[0].text.length / 1024)} KB)`);

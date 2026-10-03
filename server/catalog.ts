@@ -4,9 +4,11 @@ import {
 	buildModelRuntime,
 	activeProvidersFrom,
 	providerDisplayNames,
+	resolveAutoProviderIds,
 	toProviderModels,
 	type SettingsHandle,
 } from "./model-runtime.js";
+import { externalProviderLabels, hasExternalConfig } from "./external-pi.js";
 
 /**
  * Builds the model catalog the daemon shows in the composer picker: spin up a
@@ -23,21 +25,28 @@ export async function buildCatalog(settingsHandle: SettingsHandle): Promise<Prov
 	const defaultThinkingOptionId =
 		state.status === "ready" ? state.values.defaultThinkingLevel : "medium";
 
-	if (providers.length === 0) {
+	const reuseExternalPi = state.status === "ready" ? state.values.reuseExternalPi === true : false;
+	const hasExternal = reuseExternalPi && hasExternalConfig();
+
+	if (providers.length === 0 && !hasExternal) {
 		return { models: [], modes };
 	}
 
-	const runtime = await buildModelRuntime(providers);
+	const runtime = await buildModelRuntime(providers, { reuseExternalPi });
 	let available: Parameters<typeof toProviderModels>[0] = [];
 	try {
 		available = (await runtime.getAvailable()).slice();
 	} catch {
 		available = [];
 	}
+	// Manual names win over external ones (manual entries override on merge).
+	const externalLabels = reuseExternalPi ? await externalProviderLabels() : {};
+	const labels = { ...externalLabels, ...providerDisplayNames(providers) };
 	const models = toProviderModels(
 		available,
 		defaultThinkingOptionId,
-		providerDisplayNames(providers),
+		labels,
+		resolveAutoProviderIds(externalLabels, providers),
 	);
 
 	return {

@@ -45,6 +45,12 @@ export const settings = defineSettings({
   schema: z.object({
     /** Master toggle — when off, provider reports unavailable. */
     enabled: z.boolean().default(true),
+    /**
+     * Reuse LLM providers configured for the user's external pi installation
+     * (~/.pi/agent auth.json + models.json). Read-only except OAuth token
+     * refresh, which persists rotated tokens exactly like external pi does.
+     */
+    reuseExternalPi: z.boolean().default(true),
     /** Default reasoning/thinking level for supported models. */
     defaultThinkingLevel: z.enum(["off", "low", "medium", "high"]).default("medium"),
     /** Global custom instructions appended to Pi's system prompt in all conversations. */

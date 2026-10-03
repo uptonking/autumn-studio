@@ -3,6 +3,7 @@ import type { PluginTheme } from "@getpaseo/plugin";
 import type { SettingsState } from "@getpaseo/plugin/client";
 import { SettingsSection, SettingsCard, SettingsAction } from "@getpaseo/plugin/client/ui";
 import type { ProviderEntry, settings } from "../shared/settings.js";
+import type { ExternalProviderInfo } from "../shared/rpc.js";
 import { isCustomType, providerDisplayName, providerTypeLabel } from "./provider-editor.js";
 
 type ReadySettings = Extract<
@@ -132,6 +133,120 @@ export function ProviderList({
 					/>
 				</SettingsCard>
 			)}
+		</SettingsSection>
+	);
+}
+
+/**
+ * Same auto-detected marker the chatbox picker uses in model descriptions
+ * (server constant in server/model-runtime.ts), kept in sync by convention.
+ */
+const AUTO_MARKER = "\u{1F441}\uFE0E";
+
+/** Human label for a detection auth source. */
+export function authSourceLabel(source: string): string {
+	switch (source) {
+		case "oauth":
+			return "OAuth";
+		case "stored":
+			return "API key (auth.json)";
+		case "models_json_key":
+			return "API key (models.json)";
+		case "models_json_command":
+			return "API key command (models.json)";
+		case "environment":
+			return "Environment variable";
+		case "runtime":
+			return "Runtime key";
+		default:
+			return source;
+	}
+}
+
+function ExternalProviderRow({
+	provider,
+	theme,
+	onView,
+}: {
+	provider: ExternalProviderInfo;
+	theme: PluginTheme;
+	onView(): void;
+}) {
+	return (
+		<Pressable
+			onPress={onView}
+			accessibilityLabel={`View ${provider.name}`}
+			style={({ pressed }) => ({
+				flexDirection: "row",
+				alignItems: "center",
+				justifyContent: "space-between",
+				paddingVertical: 14,
+				paddingHorizontal: 16,
+				opacity: pressed ? 0.6 : 1,
+			})}
+		>
+			<View style={{ flex: 1, marginRight: 12 }}>
+				<View style={{ flexDirection: "row", alignItems: "center" }}>
+					<Text style={{ color: theme.colors.foreground, fontSize: 15, fontWeight: "600" }}>
+						{`${AUTO_MARKER} ${provider.name}`}
+					</Text>
+				</View>
+				<Text style={{ color: theme.colors.foregroundMuted, fontSize: 13, marginTop: 2 }}>
+					{[
+						authSourceLabel(provider.authSource),
+						`${provider.models.length} model${provider.models.length === 1 ? "" : "s"}`,
+					].join(" · ")}
+				</Text>
+			</View>
+			<View
+				style={{
+					width: 8,
+					height: 8,
+					borderRadius: 4,
+					marginRight: 12,
+					backgroundColor: theme.colors.statusSuccess,
+				}}
+			/>
+			<Text style={{ color: theme.colors.foregroundMuted, fontSize: 18 }}>›</Text>
+		</Pressable>
+	);
+}
+
+/**
+ * Read-only list of LLM providers detected in the user's external pi
+ * installation. Tapping a row opens the read-only viewer page.
+ */
+export function ExternalProviderList({
+	providers,
+	theme,
+	onView,
+}: {
+	providers: ExternalProviderInfo[];
+	theme: PluginTheme;
+	onView(provider: ExternalProviderInfo): void;
+}) {
+	if (providers.length === 0) return null;
+	return (
+		<SettingsSection
+			title="Auto-Detected Models from External Agents"
+			info={
+				<Text style={{ color: theme.colors.foregroundMuted, fontSize: 13 }}>
+					Providers detected from external agents (currently external Pi).
+					Their models appear in the chatbox model picker automatically;
+					these entries are managed by the source agent and read-only here.
+				</Text>
+			}
+		>
+			<SettingsCard>
+				{providers.map((provider) => (
+					<ExternalProviderRow
+						key={provider.id}
+						provider={provider}
+						theme={theme}
+						onView={() => onView(provider)}
+					/>
+				))}
+			</SettingsCard>
 		</SettingsSection>
 	);
 }
