@@ -7,9 +7,9 @@
  * and runs it with standard Node ESM resolution, filesystem access, and WASM
  * modules enabled.
  */
-import { fileURLToPath } from "node:url";
+import { fileURLToPath } from 'node:url';
 
-const rpcEntry = fileURLToPath(
-	import.meta.resolve("@earendil-works/pi-coding-agent/rpc-entry"),
+const rpcEntry: string = fileURLToPath(
+  import.meta.resolve('@earendil-works/pi-coding-agent/rpc-entry'),
 );
 await import(rpcEntry);

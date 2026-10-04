@@ -1,0 +1,16 @@
+# Git hooks. Installed by `npm install` through the guarded `prepare` script
+# (scripts/install-git-hooks.ts) or explicitly with `npm run hooks:install`.
+pre-commit:
+  parallel: true
+  jobs:
+    - name: format
+      glob: '*.{cjs,css,js,json,jsonc,jsx,md,mjs,ts,tsx,yaml,yml}'
+      exclude:
+        - 'package-lock.json'
+        - 'LICENSE.md'
+      run: npm run format:check:files -- {staged_files}
+    - name: lint
+      glob: '*.{cjs,js,jsx,mjs,ts,tsx}'
+      run: npm run lint -- {staged_files}
+    - name: typecheck
+      run: npm run typecheck

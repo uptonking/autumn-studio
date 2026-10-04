@@ -5,20 +5,35 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "integration-test": "node scripts/integration-test.mjs",
-    "typecheck": "tsc --noEmit"
+    "integration-test": "node scripts/integration-test.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "format": "oxfmt .",
+    "format:check": "oxfmt --check .",
+    "format:check:files": "oxfmt --check",
+    "format:files": "oxfmt",
+    "hooks:install": "lefthook install --force",
+    "prepare": "node scripts/install-git-hooks.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "^1.0.0"
+    "@earendil-works/pi-coding-agent": "^1.0.2"
   },
   "devDependencies": {
-    "@getpaseo/plugin": "*",
-    "@types/node": "^22.0.0",
-    "@types/react": "~19.2.0",
+    "@getpaseo/plugin": "^0.11.0-beta.3",
+    "@types/node": "^22.20.5",
+    "@types/react": "~19.1.0",
     "@types/use-sync-external-store": "^1.7.0",
-    "react": "^19.1.0",
+    "lefthook": "^2.1.16",
+    "oxfmt": "^0.71.0",
+    "oxlint": "^1.86.0",
+    "oxlint-tsgolint": "^7.0.2003",
+    "react": "~19.1.0",
     "react-native": "^0.81.5",
-    "typescript": "^5.0.0",
-    "zod": "*"
+    "typescript": "^7.0.0",
+    "zod": "^4.6.5"
+  },
+  "engines": {
+    "node": "^22.18.0 || >=24.0.0"
   }
 }

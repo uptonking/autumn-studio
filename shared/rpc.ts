@@ -1,9 +1,9 @@
-import { defineRpc } from "@getpaseo/plugin";
-import { z } from "zod";
+import { defineRpc } from '@getpaseo/plugin';
+import { z } from 'zod';
 
 // Names must match /^[a-z][a-z0-9._-]*$/ — defineRpc rejects uppercase.
 export const testProviderRpc = defineRpc({
-  name: "autumn-studio.test-provider",
+  name: 'autumn-studio.test-provider',
   input: z.object({
     type: z.string(),
     apiKey: z.string(),
@@ -35,7 +35,7 @@ export const externalProviderSchema = z.object({
 });
 
 export const externalProvidersRpc = defineRpc({
-  name: "autumn-studio.external-providers",
+  name: 'autumn-studio.external-providers',
   input: z.object({}),
   output: z.object({
     /** External pi agent dir that was inspected. */

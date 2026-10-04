@@ -22,34 +22,39 @@ export async function testProviderConnection(
 
   try {
     switch (type) {
-      case "anthropic": {
-        const url = (cleanUrl ? cleanUrl.replace(/\/+$/, "") : "https://api.anthropic.com/v1") + "/models";
+      case 'anthropic': {
+        const url =
+          (cleanUrl
+            ? cleanUrl.replace(/\/+$/, '')
+            : 'https://api.anthropic.com/v1') + '/models';
         const res = await fetch(url, {
           headers: {
-            "x-api-key": cleanKey,
-            "anthropic-version": "2023-06-01",
+            'x-api-key': cleanKey,
+            'anthropic-version': '2023-06-01',
           },
           signal: controller.signal,
         });
         clearTimeout(timeout);
         if (!res.ok) {
-          const body = await res.text().catch(() => "");
+          const body = await res.text().catch(() => '');
           return {
             success: false,
-            message: `Anthropic API returned ${res.status}: ${res.statusText} ${body ? `(${body.slice(0, 100)})` : ""}`,
+            message: `Anthropic API returned ${res.status}: ${res.statusText} ${body ? `(${body.slice(0, 100)})` : ''}`,
           };
         }
-        const data = (await res.json()) as any;
+        const data = await res.json();
         const count = Array.isArray(data?.data) ? data.data.length : undefined;
         return {
           success: true,
-          message: `Connected to Anthropic successfully!${count ? ` (${count} models found)` : ""}`,
+          message: `Connected to Anthropic successfully!${count ? ` (${count} models found)` : ''}`,
           modelsCount: count,
         };
       }
 
-      case "google": {
-        const base = cleanUrl ? cleanUrl.replace(/\/+$/, "") : "https://generativelanguage.googleapis.com";
+      case 'google': {
+        const base = cleanUrl
+          ? cleanUrl.replace(/\/+$/, '')
+          : 'https://generativelanguage.googleapis.com';
         const url = `${base}/v1beta/models?key=${encodeURIComponent(cleanKey)}`;
         const res = await fetch(url, { signal: controller.signal });
         clearTimeout(timeout);
@@ -59,52 +64,58 @@ export async function testProviderConnection(
             message: `Google Gemini API returned ${res.status}: ${res.statusText}`,
           };
         }
-        const data = (await res.json()) as any;
-        const count = Array.isArray(data?.models) ? data.models.length : undefined;
+        const data = await res.json();
+        const count = Array.isArray(data?.models)
+          ? data.models.length
+          : undefined;
         return {
           success: true,
-          message: `Connected to Google Gemini successfully!${count ? ` (${count} models found)` : ""}`,
+          message: `Connected to Google Gemini successfully!${count ? ` (${count} models found)` : ''}`,
           modelsCount: count,
         };
       }
 
-      case "openai":
-      case "deepseek":
-      case "openrouter":
-      case "groq":
-      case "mistral":
-      case "together":
-      case "fireworks":
-      case "xai":
+      case 'openai':
+      case 'deepseek':
+      case 'openrouter':
+      case 'groq':
+      case 'mistral':
+      case 'together':
+      case 'fireworks':
+      case 'xai':
       default: {
-        let defaultBase = "https://api.openai.com/v1";
-        if (type === "deepseek") defaultBase = "https://api.deepseek.com/v1";
-        else if (type === "openrouter") defaultBase = "https://openrouter.ai/api/v1";
-        else if (type === "groq") defaultBase = "https://api.groq.com/openai/v1";
-        else if (type === "mistral") defaultBase = "https://api.mistral.ai/v1";
-        else if (type === "together") defaultBase = "https://api.together.xyz/v1";
-        else if (type === "fireworks") defaultBase = "https://api.fireworks.ai/inference/v1";
-        else if (type === "xai") defaultBase = "https://api.x.ai/v1";
+        let defaultBase = 'https://api.openai.com/v1';
+        if (type === 'deepseek') defaultBase = 'https://api.deepseek.com/v1';
+        else if (type === 'openrouter')
+          defaultBase = 'https://openrouter.ai/api/v1';
+        else if (type === 'groq')
+          defaultBase = 'https://api.groq.com/openai/v1';
+        else if (type === 'mistral') defaultBase = 'https://api.mistral.ai/v1';
+        else if (type === 'together')
+          defaultBase = 'https://api.together.xyz/v1';
+        else if (type === 'fireworks')
+          defaultBase = 'https://api.fireworks.ai/inference/v1';
+        else if (type === 'xai') defaultBase = 'https://api.x.ai/v1';
 
-        const base = (cleanUrl || defaultBase).replace(/\/+$/, "");
-        const url = base.endsWith("/models") ? base : `${base}/models`;
+        const base = (cleanUrl || defaultBase).replace(/\/+$/, '');
+        const url = base.endsWith('/models') ? base : `${base}/models`;
         const headers: Record<string, string> = {};
         if (cleanKey) headers.Authorization = `Bearer ${cleanKey}`;
 
         const res = await fetch(url, { headers, signal: controller.signal });
         clearTimeout(timeout);
         if (!res.ok) {
-          const body = await res.text().catch(() => "");
+          const body = await res.text().catch(() => '');
           return {
             success: false,
-            message: `Endpoint returned ${res.status}: ${res.statusText} ${body ? `(${body.slice(0, 100)})` : ""}`,
+            message: `Endpoint returned ${res.status}: ${res.statusText} ${body ? `(${body.slice(0, 100)})` : ''}`,
           };
         }
-        const data = (await res.json()) as any;
+        const data = await res.json();
         const count = Array.isArray(data?.data) ? data.data.length : undefined;
         return {
           success: true,
-          message: `Connected successfully!${count ? ` (${count} models found)` : ""}`,
+          message: `Connected successfully!${count ? ` (${count} models found)` : ''}`,
           modelsCount: count,
         };
       }

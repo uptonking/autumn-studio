@@ -16,6 +16,7 @@ sample-**/
 .env.dev
 
 .zcode/
+.kilo/
 
 # Root-only runtime configuration. These names must never be committed.
 node.env

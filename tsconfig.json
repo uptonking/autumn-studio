@@ -10,16 +10,8 @@
     "declaration": false,
     "noEmit": true,
     "resolveJsonModule": true,
-    "types": ["node"],
-    "baseUrl": ".",
-    "paths": {
-      "@getpaseo/plugin": ["../paseo/packages/plugin/src/index.ts"],
-      "@getpaseo/plugin/*": ["../paseo/packages/plugin/src/*"],
-      "zod": ["node_modules/zod"],
-      "react-native": ["node_modules/react-native"],
-      "use-sync-external-store": ["node_modules/@types/use-sync-external-store"],
-      "use-sync-external-store/*": ["node_modules/@types/use-sync-external-store/*"]
-    }
+    "types": ["node"]
   },
   "include": ["*.ts", "*.tsx", "shared/**/*", "server/**/*", "client/**/*"],
-  "exclude": ["node_modules", "dist", "scripts"]}
+  "exclude": ["node_modules", "dist", "scripts"]
+}

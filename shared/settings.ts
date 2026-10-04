@@ -1,12 +1,12 @@
-import { defineSettings } from "@getpaseo/plugin";
-import { z } from "zod";
+import { defineSettings } from '@getpaseo/plugin';
+import { z } from 'zod';
 
 /** Schema for a configured LLM provider entry. */
 const providerEntrySchema = z.object({
   /** Unique ID for this entry. */
   id: z.string(),
   /** Display name (e.g. "My Anthropic", "Company LLM Proxy"). */
-  name: z.string().default(""),
+  name: z.string().default(''),
   /**
    * Provider type — maps to Pi's provider IDs.
    *
@@ -14,11 +14,11 @@ const providerEntrySchema = z.object({
    * "openrouter", "groq", "mistral", "xai", "together", "fireworks")
    * or "custom" for generic OpenAI-compatible endpoints.
    */
-  type: z.string().default("anthropic"),
+  type: z.string().default('anthropic'),
   /** API key or token. */
-  apiKey: z.string().default(""),
+  apiKey: z.string().default(''),
   /** Custom base URL (required for "custom" type, optional override for others). */
-  baseUrl: z.string().default(""),
+  baseUrl: z.string().default(''),
   /**
    * Manually listed model ids for custom endpoints, comma-separated in the UI.
    * Registered in addition to whatever /v1/models discovery returns — so the
@@ -39,8 +39,8 @@ const providerEntrySchema = z.object({
 export type ProviderEntry = z.infer<typeof providerEntrySchema>;
 
 export const settings = defineSettings({
-  id: "config",
-  scope: "host",
+  id: 'config',
+  scope: 'host',
   version: 1,
   schema: z.object({
     /** Master toggle — when off, provider reports unavailable. */
@@ -52,9 +52,11 @@ export const settings = defineSettings({
      */
     reuseExternalPi: z.boolean().default(true),
     /** Default reasoning/thinking level for supported models. */
-    defaultThinkingLevel: z.enum(["off", "low", "medium", "high"]).default("medium"),
+    defaultThinkingLevel: z
+      .enum(['off', 'low', 'medium', 'high'])
+      .default('medium'),
     /** Global custom instructions appended to Pi's system prompt in all conversations. */
-    customInstructions: z.string().default(""),
+    customInstructions: z.string().default(''),
     /** Configured LLM provider entries. */
     providers: z.array(providerEntrySchema).default([]),
   }),
